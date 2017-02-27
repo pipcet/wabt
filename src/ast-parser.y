@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <type_traits>
+
 #include "ast-parser.h"
 #include "ast-parser-lexer-shared.h"
 #include "binary-reader-ast.h"
@@ -30,6 +32,7 @@
 
 #define RELOCATE_STACK(type, array, stack_base, old_byte_size, new_size)      \
   do {                                                                        \
+    WABT_STATIC_ASSERT(std::is_trivially_copyable<type>::value);              \
     if ((stack_base) == (array)) {                                            \
       (stack_base) = (type*)wabt_alloc((new_size) * sizeof(*(stack_base)));   \
       memcpy((stack_base), (array), old_byte_size);                           \
