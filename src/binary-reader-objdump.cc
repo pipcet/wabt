@@ -399,7 +399,8 @@ static Result begin_function_body(BinaryReaderContext* context,
   Context* ctx = static_cast<Context*>(context->user_data);
 
   if (ctx->options->mode == ObjdumpMode::Disassemble) {
-    if (index < ctx->options->function_names.size)
+    if (index < ctx->options->function_names.size &&
+        !string_slice_is_empty(&ctx->options->function_names.data[index]))
       printf("%06" PRIzx " <" PRIstringslice ">:\n", context->offset,
              WABT_PRINTF_STRING_SLICE_ARG(
                  ctx->options->function_names.data[index]));
