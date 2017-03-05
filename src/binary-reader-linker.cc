@@ -85,6 +85,8 @@ static Result on_import(uint32_t index,
 static Result on_import_func(uint32_t import_index,
                              uint32_t global_index,
                              uint32_t sig_index,
+                             StringSlice module_name,
+                             StringSlice field_name,
                              void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   FunctionImport* import =
@@ -100,6 +102,8 @@ static Result on_import_global(uint32_t import_index,
                                uint32_t global_index,
                                Type type,
                                bool mutable_,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   GlobalImport* import = append_global_import(&ctx->binary->global_imports);

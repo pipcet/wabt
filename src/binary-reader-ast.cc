@@ -193,6 +193,8 @@ static Result on_import(uint32_t index,
 static Result on_import_func(uint32_t import_index,
                              uint32_t func_index,
                              uint32_t sig_index,
+                             StringSlice module_name,
+                             StringSlice field_name,
                              void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   assert(import_index == ctx->module->imports.size - 1);
@@ -216,6 +218,8 @@ static Result on_import_table(uint32_t import_index,
                               uint32_t table_index,
                               Type elem_type,
                               const Limits* elem_limits,
+                              StringSlice module_name,
+                              StringSlice field_name,
                               void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   assert(import_index == ctx->module->imports.size - 1);
@@ -232,6 +236,8 @@ static Result on_import_table(uint32_t import_index,
 static Result on_import_memory(uint32_t import_index,
                                uint32_t memory_index,
                                const Limits* page_limits,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   assert(import_index == ctx->module->imports.size - 1);
@@ -249,6 +255,8 @@ static Result on_import_global(uint32_t import_index,
                                uint32_t global_index,
                                Type type,
                                bool mutable_,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   assert(import_index == ctx->module->imports.size - 1);

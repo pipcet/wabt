@@ -40,11 +40,6 @@ while true; do rm -rf build/common/wabt* src/wabt* && make build/common/wabt.mak
 #include <alloca.h>
 #endif
 
-#define INDENT_SIZE 2
-
-#define INITIAL_PARAM_TYPES_CAPACITY 128
-#define INITIAL_BR_TABLE_TARGET_CAPACITY 1000
-
 namespace wabt {
 
 typedef uint32_t Uint32;
@@ -52,68 +47,6 @@ WABT_DEFINE_VECTOR(type, Type)
 WABT_DEFINE_VECTOR(uint32, Uint32);
 WABT_DEFINE_VECTOR(string_slice, StringSlice);
 WABT_DEFINE_VECTOR(ssvec, StringSliceVector);
-
-#define CALLBACK_CTX(member, ...)                                       \
-  RAISE_ERROR_UNLESS(                                                   \
-      WABT_SUCCEEDED(                                                   \
-          ctx->reader->member                                           \
-              ? ctx->reader->member(get_user_context(ctx), __VA_ARGS__) \
-              : Result::Ok),                                            \
-      #member " callback failed")
-
-#define CALLBACK_CTX0(member)                                         \
-  RAISE_ERROR_UNLESS(                                                 \
-      WABT_SUCCEEDED(ctx->reader->member                              \
-                         ? ctx->reader->member(get_user_context(ctx)) \
-                         : Result::Ok),                               \
-      #member " callback failed")
-
-#define CALLBACK_SECTION(member, section_size) \
-  CALLBACK_CTX(member, section_size)
-
-#define CALLBACK0(member)                                              \
-  RAISE_ERROR_UNLESS(                                                  \
-      WABT_SUCCEEDED(ctx->reader->member                               \
-                         ? ctx->reader->member(ctx->reader->user_data) \
-                         : Result::Ok),                                \
-      #member " callback failed")
-
-#define CALLBACK(member, ...)                                            \
-  RAISE_ERROR_UNLESS(                                                    \
-      WABT_SUCCEEDED(                                                    \
-          ctx->reader->member                                            \
-              ? ctx->reader->member(__VA_ARGS__, ctx->reader->user_data) \
-              : Result::Ok),                                             \
-      #member " callback failed")
-
-#define FORWARD0(member)                                                   \
-  return ctx->reader->member ? ctx->reader->member(ctx->reader->user_data) \
-                             : Result::Ok
-
-#define FORWARD_CTX0(member)                  \
-  if (!ctx->reader->member)                   \
-    return Result::Ok;                        \
-  BinaryReaderContext new_ctx = *context;     \
-  new_ctx.user_data = ctx->reader->user_data; \
-  return ctx->reader->member(&new_ctx);
-
-#define FORWARD_CTX(member, ...)              \
-  if (!ctx->reader->member)                   \
-    return Result::Ok;                        \
-  BinaryReaderContext new_ctx = *context;     \
-  new_ctx.user_data = ctx->reader->user_data; \
-  return ctx->reader->member(&new_ctx, __VA_ARGS__);
-
-#define FORWARD(member, ...)                                            \
-  return ctx->reader->member                                            \
-             ? ctx->reader->member(__VA_ARGS__, ctx->reader->user_data) \
-             : Result::Ok
-
-#define RAISE_ERROR(...) raise_error(ctx, __VA_ARGS__)
-
-#define RAISE_ERROR_UNLESS(cond, ...) \
-  if (!(cond))                        \
-    RAISE_ERROR(__VA_ARGS__);
 
 struct Context {
   const uint8_t* data;
@@ -698,6 +631,8 @@ static Result s_on_import(uint32_t index,
 static Result s_on_import_func(uint32_t index,
                                uint32_t function_index,
                                uint32_t sig_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                void* user_data)
 {
   SContext* sctx = static_cast<SContext*>(user_data);
@@ -725,6 +660,8 @@ static Result s_on_import_table(uint32_t index,
                                 uint32_t table_index,
                                 Type elem_type,
                                 const Limits* elem_limits,
+                                StringSlice module_name,
+                                StringSlice field_name,
                                 void* user_data)
 {
   SContext* sctx = static_cast<SContext*>(user_data);
@@ -752,6 +689,8 @@ static Result s_on_import_table(uint32_t index,
 static Result s_on_import_memory(uint32_t index,
                                  uint32_t memory_index,
                                  const Limits* page_limits,
+                                 StringSlice module_name,
+                                 StringSlice field_name,
                                  void* user_data)
 {
   SContext* sctx = static_cast<SContext*>(user_data);
@@ -779,6 +718,8 @@ static Result s_on_import_global(uint32_t index,
                                  uint32_t global_index,
                                  Type type,
                                  bool mutable_,
+                                 StringSlice module_name,
+                                 StringSlice field_name,
                                  void* user_data)
 {
   SContext* sctx = static_cast<SContext*>(user_data);
@@ -1629,12 +1570,12 @@ n;
 
   read_binary(data, size, &s_reader, 1, options);
 
-  if (false)
-    for (uint32_t i = 0; i < sctx.comments.size; i++) {
-      OOLComment* c = sctx.comments.data[i].comment;
-      fprintf(sctx.f, "# %ld: ", long(c->offset));
-      c->print(sctx.f);
-    }
+  fprintf(sctx.f, "###########\n");
+  for (uint32_t i = 0; i < sctx.comments.size; i++) {
+    OOLComment* c = sctx.comments.data[i].comment;
+    fprintf(sctx.f, "# %ld: ", long(c->offset));
+    c->print(sctx.f);
+  }
 
   return Result::Ok;
 }

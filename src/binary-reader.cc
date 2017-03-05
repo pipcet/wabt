@@ -693,17 +693,21 @@ static Result logging_on_import(uint32_t index,
 static Result logging_on_import_func(uint32_t import_index,
                                      uint32_t func_index,
                                      uint32_t sig_index,
+                                     StringSlice module_name,
+                                     StringSlice field_name,
                                      void* user_data) {
   LoggingContext* ctx = static_cast<LoggingContext*>(user_data);
   LOGF("on_import_func(import_index: %u, func_index: %u, sig_index: %u)\n",
        import_index, func_index, sig_index);
-  FORWARD(on_import_func, import_index, func_index, sig_index);
+  FORWARD(on_import_func, import_index, func_index, sig_index, module_name, field_name);
 }
 
 static Result logging_on_import_table(uint32_t import_index,
                                       uint32_t table_index,
                                       Type elem_type,
                                       const Limits* elem_limits,
+                                      StringSlice module_name,
+                                      StringSlice field_name,
                                       void* user_data) {
   LoggingContext* ctx = static_cast<LoggingContext*>(user_data);
   char buf[100];
@@ -711,25 +715,29 @@ static Result logging_on_import_table(uint32_t import_index,
   LOGF(
       "on_import_table(import_index: %u, table_index: %u, elem_type: %s, %s)\n",
       import_index, table_index, get_type_name(elem_type), buf);
-  FORWARD(on_import_table, import_index, table_index, elem_type, elem_limits);
+  FORWARD(on_import_table, import_index, table_index, elem_type, elem_limits, module_name, field_name);
 }
 
 static Result logging_on_import_memory(uint32_t import_index,
                                        uint32_t memory_index,
                                        const Limits* page_limits,
+                                       StringSlice module_name,
+                                       StringSlice field_name,
                                        void* user_data) {
   LoggingContext* ctx = static_cast<LoggingContext*>(user_data);
   char buf[100];
   sprint_limits(buf, sizeof(buf), page_limits);
   LOGF("on_import_memory(import_index: %u, memory_index: %u, %s)\n",
        import_index, memory_index, buf);
-  FORWARD(on_import_memory, import_index, memory_index, page_limits);
+  FORWARD(on_import_memory, import_index, memory_index, page_limits, module_name, field_name);
 }
 
 static Result logging_on_import_global(uint32_t import_index,
                                        uint32_t global_index,
                                        Type type,
                                        bool mutable_,
+                                       StringSlice module_name,
+                                       StringSlice field_name,
                                        void* user_data) {
   LoggingContext* ctx = static_cast<LoggingContext*>(user_data);
   LOGF(
@@ -737,7 +745,7 @@ static Result logging_on_import_global(uint32_t import_index,
       "%s)\n",
       import_index, global_index, get_type_name(type),
       mutable_ ? "true" : "false");
-  FORWARD(on_import_global, import_index, global_index, type, mutable_);
+  FORWARD(on_import_global, import_index, global_index, type, mutable_, module_name, field_name);
 }
 
 static Result logging_on_table(uint32_t index,
@@ -1712,7 +1720,7 @@ static void read_import_section(Context* ctx, uint32_t section_size) {
         in_u32_leb128(ctx, &sig_index, "import signature index");
         RAISE_ERROR_UNLESS(sig_index < ctx->num_signatures,
                            "invalid import signature index");
-        CALLBACK(on_import_func, i, ctx->num_func_imports, sig_index);
+        CALLBACK(on_import_func, i, ctx->num_func_imports, sig_index, module_name, field_name);
         ctx->num_func_imports++;
         break;
       }
@@ -1722,7 +1730,7 @@ static void read_import_section(Context* ctx, uint32_t section_size) {
         Limits elem_limits;
         read_table(ctx, &elem_type, &elem_limits);
         CALLBACK(on_import_table, i, ctx->num_table_imports, elem_type,
-                 &elem_limits);
+                 &elem_limits, module_name, field_name);
         ctx->num_table_imports++;
         break;
       }
@@ -1730,7 +1738,7 @@ static void read_import_section(Context* ctx, uint32_t section_size) {
       case ExternalKind::Memory: {
         Limits page_limits;
         read_memory(ctx, &page_limits);
-        CALLBACK(on_import_memory, i, ctx->num_memory_imports, &page_limits);
+        CALLBACK(on_import_memory, i, ctx->num_memory_imports, &page_limits, module_name, field_name);
         ctx->num_memory_imports++;
         break;
       }
@@ -1739,7 +1747,7 @@ static void read_import_section(Context* ctx, uint32_t section_size) {
         Type type;
         bool mutable_;
         read_global_header(ctx, &type, &mutable_);
-        CALLBACK(on_import_global, i, ctx->num_global_imports, type, mutable_);
+        CALLBACK(on_import_global, i, ctx->num_global_imports, type, mutable_, module_name, field_name);
         ctx->num_global_imports++;
         break;
       }
