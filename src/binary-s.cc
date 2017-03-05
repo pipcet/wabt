@@ -151,164 +151,184 @@ static void s_on_error(BinaryReaderContext* ctx, const char* message)
   abort();
 }
 
+struct QuotedStringSlice : StringSlice {
+};
+
+struct TypeChar {
+  const Type t;
+  TypeChar(const Type t)
+    : t(t) {}
+  operator Type()
+  {
+    return t;
+  }
+};
+
+struct Signature {
+  uint32_t num_args;
+  const Type* args;
+  uint32_t num_results;
+  const Type* results;
+
+  Signature(uint32_t num_args, const Type* args,
+            uint32_t num_results, const Type* results)
+    : num_args(num_args), args(args), num_results(num_results), results(results)
+    {}
+};
+
 struct SContext {
 public:
-  void print_sslice(StringSlice slice);
-  void print_sslice_quoted(StringSlice slice);
-  void print_signature(uint32_t, const Type*, uint32_t, const Type*);
-  void printf(const char* format);
-  void printc(const char* format, int8_t);
-  void printu(const char* format, uint32_t);
+  template<typename A, typename... As>
+  void
+  print(A arg, As... args) {
+    print(arg);
+    print(args...);
+  }
+
+  void print() {}
+
+  void print(StringSlice slice);
+  void print(QuotedStringSlice slice);
+  void print(Signature sig);
+  void print(Opcode opcode);
+  void print(float f);
+  void print(double d);
+  void print(int32_t i32);
+  void print(int64_t i64);
+  void print(unsigned int);
+  void print(unsigned long);
+  void print(const Limits*);
+  void print(const TypeChar);
+  void print(const Type);
+  void print(const char*);
+
+  template<typename... As>
+  void
+  printf(As... args) {
+    fprintf(f, args...);
+  }
+
   void printf32(const char* format, int, float);
   void printf64(const char* format, int, double);
   void printi32(const char* format, int);
   void printi64(const char* format, long long);
   void prints(const char* format, int, const char*);
-  void printo(Opcode opcode);
-  void println();
-  void print_type(Type);
-  void print_type_char(Type);
-  void print_limits(const Limits*);
-  void print_uleb128(const char*);
-  void print_uleb128(uint32_t);
   FILE *f;
 };
 
-void SContext::printo(Opcode opcode)
+void SContext::print(Opcode opcode)
 {
   const char* s = get_opcode_name(opcode);
 
   if (!s)
     abort();
 
-  printf("\t");
   while (*s) {
-    printc("%c", (*s == '/') ? '_' : *s);
+    printf("%c", (*s == '/') ? '_' : *s);
     s++;
   }
 }
 
-void SContext::print_signature(uint32_t plen, const Type* p, uint32_t rlen,
-                               const Type* r)
+void SContext::print(Signature sig)
 {
-  printf("F");
-  for (uint32_t i = 0; i < plen; i++)
-    print_type_char(p[i]);
-  for (uint32_t i = 0; i < rlen; i++)
-    print_type_char(r[i]);
-  printf("E");
+  print("F");
+  for (uint32_t i = 0; i < sig.num_args; i++)
+    print(TypeChar(sig.args[i]));
+  for (uint32_t i = 0; i < sig.num_results; i++)
+    print(TypeChar(sig.results[i]));
+  print("E");
 }
 
-void SContext::print_sslice(StringSlice slice)
+void SContext::print(StringSlice slice)
 {
-  prints(PRIstringslice, WABT_PRINTF_STRING_SLICE_ARG(slice));
+  printf(PRIstringslice, WABT_PRINTF_STRING_SLICE_ARG(slice));
 }
 
-void SContext::print_sslice_quoted(StringSlice slice)
+void SContext::print(QuotedStringSlice slice)
 {
-  prints("\"" PRIstringslice "\"", WABT_PRINTF_STRING_SLICE_ARG(slice));
+  printf("\"" PRIstringslice "\"", WABT_PRINTF_STRING_SLICE_ARG(slice));
 }
 
-void SContext::printf(const char* format)
+void SContext::print(int32_t x)
 {
-  fprintf(f, "%s", format);
+  fprintf(f, "%d", x);
 }
 
-void SContext::println()
+void SContext::print(int64_t x)
 {
-  fprintf(f, "\n");
+  fprintf(f, "%lld", static_cast<long long>(x));
 }
 
-void SContext::prints(const char* format, int count, const char* x)
+void SContext::print(float x)
 {
-  fprintf(f, format, count, x);
+  fprintf(f, "%.*g", DECIMAL_DIG, x);
 }
 
-void SContext::printc(const char* format, int8_t x)
+void SContext::print(double x)
 {
-  fprintf(f, format, x);
+  fprintf(f, "%.*g", DECIMAL_DIG, x);
 }
 
-void SContext::printu(const char* format, uint32_t x)
-{
-  fprintf(f, format, x);
-}
-
-void SContext::printi32(const char* format, int x)
-{
-  fprintf(f, format, x);
-}
-
-void SContext::printi64(const char* format, long long x)
-{
-  fprintf(f, format, x);
-}
-
-void SContext::printf32(const char* format, int prec, float x)
-{
-  fprintf(f, format, prec, x);
-}
-
-void SContext::printf64(const char* format, int prec, double x)
-{
-  fprintf(f, format, prec, x);
-}
-
-void SContext::print_uleb128(const char* x)
-{
-  fprintf(f, "rleb128_32 %s", x);
-}
-
-void SContext::print_uleb128(uint32_t x)
-{
-  fprintf(f, "rleb128_32 %u", x);
-}
-
-void SContext::print_limits(const Limits* limits)
+void SContext::print(const Limits* limits)
 {
   uint32_t flags = 0;
   if (limits->has_max)
     flags |= WABT_BINARY_LIMITS_HAS_MAX_FLAG;
 
-  printf("\t"); print_uleb128(flags); println();
-  printf("\t"); print_uleb128(limits->initial); println();
+  print("\t", "rleb128_32 ", flags, "\n");
+  print("\t", "rleb128_32 ", limits->initial, "\n");
   if (limits->has_max) {
-    printf("\t"); print_uleb128(limits->max); println();
+    print("\t", "rleb128_32 ", limits->max, "\n");
   }
 }
 
-void SContext::print_type(Type t)
+void SContext::print(Type t)
 {
   switch (t) {
   case Type::I32:
-    printu("\t.byte %u # i32\n", 0x7f); break;
+    print("\t", ".byte ", 0x7f, " # i32", "\n"); break;
   case Type::I64:
-    printu("\t.byte %u # i64\n", 0x7e); break;
+    print("\t", ".byte ", 0x7e, " # i64", "\n"); break;
   case Type::F32:
-    printu("\t.byte %u # f32\n", 0x7d); break;
+    print("\t", ".byte ", 0x7d, " # f32", "\n"); break;
   case Type::F64:
-    printu("\t.byte %u # f64\n", 0x7c); break;
+    print("\t", ".byte ", 0x7c, " # f64", "\n"); break;
   case Type::Anyfunc:
-    printu("\t.byte %u # anyfunc\n", 0x70); break;
+    print("\t", ".byte ", 0x70, " # anyfunc", "\n"); break;
   default:
     abort();
   }
 }
 
-void SContext::print_type_char(Type t)
+void SContext::print(TypeChar t)
 {
   switch (t) {
   case Type::I32:
-    printu("i", int(Type::I32)); break;
+    print("i"); break;
   case Type::I64:
-    printu("l", int(Type::I64)); break;
+    print("l"); break;
   case Type::F32:
-    printu("f", int(Type::F32)); break;
+    print("f"); break;
   case Type::F64:
-    printu("d", int(Type::F64)); break;
+    print("d"); break;
   default:
     abort();
   }
+}
+
+void SContext::print(unsigned int i)
+{
+  printf("%u", i);
+}
+
+void SContext::print(unsigned long i)
+{
+  printf("%u", i);
+}
+
+void SContext::print(const char* s)
+{
+  printf("%s", s);
 }
 
 static Result s_begin_custom_section(BinaryReaderContext* ctx,
@@ -317,9 +337,8 @@ static Result s_begin_custom_section(BinaryReaderContext* ctx,
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection ");
-  sctx->print_sslice(section_name);
-  sctx->println();
+  sctx->print("\t", "section ");
+  sctx->print(section_name, "\n");
 
   return Result::Ok;
 }
@@ -328,9 +347,9 @@ static Result s_begin_module(uint32_t value, void* user_data)
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\t# module (%u)\n", value);
-  sctx->printf("\t.include \"wasm32-macros.s\"\n");
-  sctx->printf("\t.include \"wasm32-header-macros.s\"\n");
+  sctx->print("\t", "# module (", value, ")", "\n");
+  sctx->print("\t", ".include \"wasm32-macros.s\"", "\n");
+  sctx->print("\t", ".include \"wasm32-header-macros.s\"", "\n");
 
   return Result::Ok;
 }
@@ -339,7 +358,7 @@ static Result s_begin_signature_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id type 1\n");
+  sctx->print("\t", "section_id type 1", "\n");
 
   return Result::Ok;
 }
@@ -354,18 +373,18 @@ static Result s_on_signature(uint32_t index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
 
-  sctx->printf("\t.pushsection .wasm.chars.type\n");
-  sctx->printu("__s_type_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.type", "\n");
+  sctx->print("__s_type_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.type\n");
-  sctx->printf("\tsignature ");
-  sctx->print_signature(param_count, param_types, result_count, result_types);
-  sctx->printf("\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.type", "\n");
+  sctx->print("\t", "signature ");
+  sctx->print(Signature(param_count, param_types, result_count, result_types));
+  sctx->print("\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -374,7 +393,7 @@ static Result s_begin_import_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id import 2\n");
+  sctx->print("\t", "section_id import 2", "\n");
 
   return Result::Ok;
 }
@@ -394,27 +413,27 @@ static Result s_on_import(uint32_t index,
        string_slice_eq_cstr(&field_name, "plt") ||
        string_slice_eq_cstr(&field_name, "table") ||
        string_slice_eq_cstr(&field_name, "memory"))) {
-    sctx->printf("\t.if 0\n");
+    sctx->print("\t", ".if 0", "\n");
     in_hidden_global_hack = true;
   } else {
     in_hidden_global_hack = false;
   }
 
-  sctx->printf("\t.pushsection .wasm.chars.import\n");
-  sctx->printu("__s_import_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.import", "\n");
+  sctx->print("__s_import_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->printf("\tlstring ");
-  sctx->print_sslice(module_name);
-  sctx->printf("\n");
-  sctx->printf("\tlstring ");
-  sctx->print_sslice(field_name);
-  sctx->printf("\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print("\t", "lstring ");
+  sctx->print(module_name);
+  sctx->print("\n");
+  sctx->print("\t", "lstring ");
+  sctx->print(field_name);
+  sctx->print("\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("", "\n");
 
   return Result::Ok;
 }
@@ -426,20 +445,20 @@ static Result s_on_import_func(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.function_index.import\n");
-  sctx->printu("__s_func_%u:\n", function_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.function_index.import", "\n");
+  sctx->print("__s_func_", function_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->printu("\t.byte %u # function\n", 0);
-  sctx->printu("\trleb128_32 __s_type_%u\n", sig_index);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print("\t", ".byte 0 # function", "\n");
+  sctx->print("\t", "rleb128_32 __s_type_", sig_index, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   if (in_hidden_global_hack) {
-    sctx->printf("\t.endif\n");
+    sctx->print("\t", ".endif", "\n");
   }
 
   return Result::Ok;
@@ -453,21 +472,21 @@ static Result s_on_import_table(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.table_index.import\n");
-  sctx->printu("__s_table_%u:\n", table_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.table_index.import", "\n");
+  sctx->print("__s_table_", table_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->printu("\t.byte %u # table\n", 1);
-  sctx->print_type(elem_type);
-  sctx->print_limits(elem_limits);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print("\t", ".byte 1 # table", "\n");
+  sctx->print(elem_type);
+  sctx->print(elem_limits);
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   if (in_hidden_global_hack) {
-    sctx->printf("\t.endif\n");
+    sctx->print("\t", ".endif", "\n");
   }
 
   return Result::Ok;
@@ -480,20 +499,20 @@ static Result s_on_import_memory(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.memory_index.import\n");
-  sctx->printu("__s_memory_%u:\n", memory_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.memory_index.import", "\n");
+  sctx->print("__s_memory_", memory_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->printu("\t.byte %u # memory\n", 2);
-  sctx->print_limits(page_limits);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print("\t", ".byte 2 # memory", "\n");
+  sctx->print(page_limits);
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   if (in_hidden_global_hack) {
-    sctx->printf("\t.endif\n");
+    sctx->print("\t", ".endif", "\n");
   }
 
   return Result::Ok;
@@ -507,21 +526,21 @@ static Result s_on_import_global(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.global_index.import\n");
-  sctx->printu("__s_global_%u:\n", global_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.global_index.import", "\n");
+  sctx->print("__s_global_", global_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->printu("\t.byte %u # global\n", 3);
-  sctx->print_type(type);
-  sctx->printu("\t.byte %u # mutable\n", mutable_ ? 1 : 0);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print("\t", ".byte 3 # global", "\n");
+  sctx->print(type);
+  sctx->print("\t", ".byte ", (mutable_ ? 1 : 0), " # mutable", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   if (in_hidden_global_hack) {
-    sctx->printf("\t.endif\n");
+    sctx->print("\t", ".endif", "\n");
   }
 
   return Result::Ok;
@@ -539,17 +558,17 @@ static Result s_on_table(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.table_index\n");
-  sctx->printu("__s_table_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.table_index", "\n");
+  sctx->print("__s_table_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.table\n");
-  sctx->print_type(elem_type);
-  sctx->print_limits(elem_limits);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.table", "\n");
+  sctx->print(elem_type);
+  sctx->print(elem_limits);
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -560,16 +579,16 @@ static Result s_on_memory(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.memory_index\n");
-  sctx->printu("__s_memory_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.memory_index", "\n");
+  sctx->print("__s_memory_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.import\n");
-  sctx->print_limits(page_limits);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
+  sctx->print(page_limits);
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -582,20 +601,20 @@ static Result s_on_export(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.export\n");
-  sctx->printu("__s_export_%u:\n", item_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.chars.export", "\n");
+  sctx->print("__s_export_", item_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.export\n");
-  sctx->printf("\tlstring ");
-  sctx->print_sslice(name);
-  sctx->printf("\n");
-  sctx->printu("\t.byte %u\n", int(kind));
-  sctx->printu("\trleb128_32 %u\n", item_index);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.export", "\n");
+  sctx->print("\t", "lstring ");
+  sctx->print(name);
+  sctx->print("", "\n");
+  sctx->print("\t", ".byte ", int(kind), "\n");
+  sctx->print("\t", "rleb128_32 ", item_index, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -605,10 +624,10 @@ static Result s_on_local_decl_count(uint32_t count,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.payload.code\n");
-  sctx->printu("\trleb128_32 %u\n", count);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.code", "\n");
+  sctx->print("\t", "rleb128_32 ", count, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("", "\n");
 
   return Result::Ok;
 }
@@ -620,11 +639,11 @@ static Result s_on_local_decl(uint32_t decl_index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.payload.code\n");
-  sctx->printu("\trleb128_32 %u\n", count);
-  sctx->print_type(type);
-  sctx->printf("\t.popsection\n");
-  sctx->printf("\n");
+  sctx->print("\t", ".pushsection .wasm.payload.code", "\n");
+  sctx->print("\t", "rleb128_32 ", count, "\n");
+  sctx->print(type);
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -634,7 +653,7 @@ static Result s_on_block_expr(uint32_t num_types,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tblock[]\n"); // XXX types
+  sctx->print("\t", "block[]", "\n"); // XXX types
 
   return Result::Ok;
 }
@@ -644,7 +663,7 @@ static Result s_on_loop_expr(uint32_t num_types,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tloop[]\n"); // XXX types
+  sctx->print("\t", "loop[]", "\n"); // XXX types
 
   return Result::Ok;
 }
@@ -653,8 +672,7 @@ static Result s_on_binary_expr(Opcode opcode,
                                void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printo(opcode);
-  sctx->println();
+  sctx->print("\t", "", opcode, "", "\n");
 
   return Result::Ok;
 }
@@ -663,8 +681,8 @@ static Result s_begin_function_signatures_section(BinaryReaderContext* ctx, uint
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id function 3\n");
-  sctx->printf("\t.section .wasm.payload.function\n");
+  sctx->print("\t", "section_id function 3", "\n");
+  sctx->print("\t", ".section .wasm.payload.function", "\n");
 
   return Result::Ok;
 }
@@ -673,7 +691,7 @@ static Result s_begin_table_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id table 4\n");
+  sctx->print("\t", "section_id table 4", "\n");
 
   return Result::Ok;
 }
@@ -682,7 +700,7 @@ static Result s_begin_memory_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id memory 5\n");
+  sctx->print("\t", "section_id memory 5", "\n");
 
   return Result::Ok;
 }
@@ -691,8 +709,8 @@ static Result s_begin_global_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id global 6\n");
-  sctx->printf("\t.section .wasm.payload.global\n");
+  sctx->print("\t", "section_id global 6", "\n");
+  sctx->print("\t", ".section .wasm.payload.global", "\n");
 
   return Result::Ok;
 }
@@ -701,7 +719,7 @@ static Result s_begin_export_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id export 7\n");
+  sctx->print("\t", "section_id export 7", "\n");
 
   return Result::Ok;
 }
@@ -710,7 +728,7 @@ static Result s_begin_start_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id start 8\n");
+  sctx->print("\t", "section_id start 8", "\n");
 
   return Result::Ok;
 }
@@ -719,7 +737,7 @@ static Result s_begin_elem_section(BinaryReaderContext* ctx, uint32_t size)
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id element 9\n");
+  sctx->print("\t", "section_id element 9", "\n");
 
   return Result::Ok;
 }
@@ -727,8 +745,8 @@ static Result s_begin_elem_section(BinaryReaderContext* ctx, uint32_t size)
 static Result s_begin_function_bodies_section(BinaryReaderContext* ctx, uint32_t size) {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id code 10\n");
-  sctx->printf("\t.section .wasm.payload.code\n");
+  sctx->print("\t", "section_id code 10", "\n");
+  sctx->print("\t", ".section .wasm.payload.code", "\n");
 
   return Result::Ok;
 }
@@ -736,7 +754,7 @@ static Result s_begin_function_bodies_section(BinaryReaderContext* ctx, uint32_t
 static Result s_begin_data_section(BinaryReaderContext* ctx, uint32_t size) {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\tsection_id data 11\n");
+  sctx->print("\t", "section_id data 11", "\n");
 
   return Result::Ok;
 }
@@ -745,13 +763,13 @@ static Result s_begin_function_body(BinaryReaderContext* ctx,
                                     uint32_t function_index) {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.code\n");
-  sctx->printu("__s_body_%u:\n", function_index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->printu("\trleb128_32 __s_endbody_%u - ", function_index);
-  sctx->printu("__s_startbody_%u\n", function_index);
-  sctx->printu("__s_startbody_%u:\n", function_index);
+  sctx->print("\t", ".pushsection .wasm.chars.code", "\n");
+  sctx->print("__s_body_", function_index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\t", "rleb128_32 __s_endbody_", function_index, " - ");
+  sctx->print("__s_startbody_", function_index, "\n");
+  sctx->print("__s_startbody_", function_index, ":", "\n");
 
   return Result::Ok;
 }
@@ -760,8 +778,8 @@ static Result s_end_function_body(uint32_t function_index,
                                   void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tend\n");
-  sctx->printu("__s_endbody_%u:\n", function_index);
+  sctx->print("\t", "end", "\n");
+  sctx->print("__s_endbody_", function_index, ":", "\n");
 
   return Result::Ok;
 }
@@ -772,14 +790,14 @@ static Result s_begin_elem_segment(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t.pushsection .wasm.chars.element\n");
-  sctx->printu("__s_elemsegment_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
+  sctx->print("\t", ".pushsection .wasm.chars.element", "\n");
+  sctx->print("__s_elemsegment_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.element\n");
-  sctx->printf("\t.pushsection .wasm.payload.element.dummy\n");
-  sctx->printu("\trleb128_32 %u\n", table_index);
+  sctx->print("\t", ".pushsection .wasm.payload.element", "\n");
+  sctx->print("\t", ".pushsection .wasm.payload.element.dummy", "\n");
+  sctx->print("\t", "rleb128_32 ", table_index, "\n");
 
   return Result::Ok;
 }
@@ -789,8 +807,8 @@ static Result s_end_elem_segment_init_expr(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tend\n");
-  sctx->printf("\t.popsection\n");
+  sctx->print("\t", "end", "\n");
+  sctx->print("\t", ".popsection", "\n");
 
   return Result::Ok;
 }
@@ -800,11 +818,11 @@ static Result s_on_elem_segment_count(uint32_t count,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\t.pushsection .wasm.payload.element\n", count);
-  sctx->printu("\t.pushsection .wasm.payload.element.dummy\n", count);
-  sctx->printu("\trleb128_32 %u\n", count);
-  sctx->printu("\t.popsection\n", count);
-  sctx->printu("\t.popsection\n", count);
+  sctx->print("\t", ".pushsection .wasm.payload.element", "\n");
+  sctx->print("\t", ".pushsection .wasm.payload.element.dummy", "\n");
+  sctx->print("\t", "rleb128_32 ", count, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\t", ".popsection", "\n");
 
   return Result::Ok;
 }
@@ -815,14 +833,14 @@ static Result s_on_elem_segment_function_index_count(BinaryReaderContext* ctx,
 {
   SContext* sctx = static_cast<SContext*>(ctx->user_data);
 
-  sctx->printu("\t.pushsection .wasm.payload.element.dummy\n", count);
-  sctx->printu("\trleb128_32 %u\n", count);
-  sctx->printu("\t.popsection\n", count);
-  sctx->printu("\t.pushsection .wasm.chars.element\n", count);
-  sctx->printu("\t.rept %u-1\n", count);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.endr\n");
-  sctx->printu("\t.popsection\n", count);
+  sctx->print("\t", ".pushsection .wasm.payload.element.dummy", "\n");
+  sctx->print("\t", "rleb128_32 ", count,  "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\t", ".pushsection .wasm.chars.element", "\n");
+  sctx->print("\t", ".rept ", count, "-1", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".endr", "\n");
+  sctx->print("\t", ".popsection", "\n");
 
   return Result::Ok;
 }
@@ -833,91 +851,22 @@ static Result s_on_elem_segment_function_index(uint32_t index,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\t"); sctx->print_uleb128(function_index); sctx->println();
+  sctx->print("\t", "rleb128_32 ", function_index, "", "\n");
 
   return Result::Ok;
 }
 
-#define LOGF_NOINDENT(...) writef(ctx->stream, __VA_ARGS__)
-
-#define LOGF(...)               \
-  do {                          \
-    write_indent(ctx);          \
-    LOGF_NOINDENT(__VA_ARGS__); \
-  } while (0)
-
-#define LOGGING_BEGIN(name)                                                 \
-  static Result logging_begin_##name(BinaryReaderContext* context,          \
-                                     uint32_t size) {                       \
-    LoggingContext* ctx = static_cast<LoggingContext*>(context->user_data); \
-    LOGF("begin_" #name "\n");                                              \
-    indent(ctx);                                                            \
-    FORWARD_CTX(begin_##name, size);                                        \
-  }
-
-#define LOGGING_END(name)                                                   \
-  static Result logging_end_##name(BinaryReaderContext* context) {          \
-    LoggingContext* ctx = static_cast<LoggingContext*>(context->user_data); \
-    dedent(ctx);                                                            \
-    LOGF("end_" #name "\n");                                                \
-    FORWARD_CTX0(end_##name);                                               \
-  }
-
-#define LOGGING_UINT32(name)                                       \
-  static Result logging_##name(uint32_t value, void* user_data) {  \
-    LoggingContext* ctx = static_cast<LoggingContext*>(user_data); \
-    LOGF(#name "(%u)\n", value);                                   \
-    FORWARD(name, value);                                          \
-  }
-
-#define LOGGING_UINT32_CTX(name)                                               \
-  static Result logging_##name(BinaryReaderContext* context, uint32_t value) { \
-    LoggingContext* ctx = static_cast<LoggingContext*>(context->user_data);    \
-    LOGF(#name "(%u)\n", value);                                               \
-    FORWARD_CTX(name, value);                                                  \
-  }
-
-#define LOGGING_UINT32_DESC(name, desc)                            \
-  static Result logging_##name(uint32_t value, void* user_data) {  \
-    LoggingContext* ctx = static_cast<LoggingContext*>(user_data); \
-    LOGF(#name "(" desc ": %u)\n", value);                         \
-    FORWARD(name, value);                                          \
-  }
-
-#define LOGGING_UINT32_UINT32(name, desc0, desc1)                   \
-  static Result logging_##name(uint32_t value0, uint32_t value1,    \
-                               void* user_data) {                   \
-    LoggingContext* ctx = static_cast<LoggingContext*>(user_data);  \
-    LOGF(#name "(" desc0 ": %u, " desc1 ": %u)\n", value0, value1); \
-    FORWARD(name, value0, value1);                                  \
-  }
-
-#define LOGGING_UINT32_UINT32_CTX(name, desc0, desc1)                         \
-  static Result logging_##name(BinaryReaderContext* context, uint32_t value0, \
-                               uint32_t value1) {                             \
-    LoggingContext* ctx = static_cast<LoggingContext*>(context->user_data);   \
-    LOGF(#name "(" desc0 ": %u, " desc1 ": %u)\n", value0, value1);           \
-    FORWARD_CTX(name, value0, value1);                                        \
-  }
-
-#define LOGGING0(name)                                             \
-  static Result logging_##name(void* user_data) {                  \
-    LoggingContext* ctx = static_cast<LoggingContext*>(user_data); \
-    LOGF(#name "\n");                                              \
-    FORWARD0(name);                                                \
-  }
-
 static Result s_on_br_expr(uint32_t depth, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tbr %u\n", depth);
+  sctx->print("\t", "br ", depth, "\n");
   return Result::Ok;
 }
 
 static Result s_on_br_if_expr(uint32_t depth, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tbr_if %u\n", depth);
+  sctx->print("\t", "br_if ", depth, "\n");
   return Result::Ok;
 }
 
@@ -927,13 +876,12 @@ static Result s_on_br_table_expr(BinaryReaderContext* context,
                                  uint32_t default_target_depth) {
   SContext* sctx = static_cast<SContext*>(context->user_data);
 
-  sctx->printf("\tbr_table");
+  sctx->print("\t", "br_table");
 
-  sctx->printu(" %u", num_targets);
+  sctx->print(" ", num_targets);
   for (uint32_t i = 0; i < num_targets; i++)
-    sctx->printu(" %u", target_depths[i]);
-  sctx->printu(" %u", default_target_depth);
-  sctx->println();
+    sctx->print(" ", target_depths[i]);
+  sctx->print(" ", default_target_depth, "\n");
   return Result::Ok;
 }
 
@@ -942,7 +890,7 @@ static Result s_on_if_expr(uint32_t num_types,
                            void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tif[]\n");
+  sctx->print("\t", "if[]", "\n");
   return Result::Ok;
 }
 
@@ -952,10 +900,7 @@ static Result s_on_load_expr(Opcode opcode,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printo(opcode);
-  sctx->printu(" a=%u", alignment_log2);
-  sctx->printu(" %u", offset);
-  sctx->println();
+  sctx->print("\t", opcode, " a=", alignment_log2, " ", offset, "\n");
 
   return Result::Ok;
 }
@@ -966,10 +911,7 @@ static Result s_on_store_expr(Opcode opcode,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printo(opcode);
-  sctx->printu(" a=%u", alignment_log2);
-  sctx->printu(" %u", offset);
-  sctx->println();
+  sctx->print("\t", opcode, " a=", alignment_log2, " ", offset, "\n");
 
   return Result::Ok;
 }
@@ -978,8 +920,7 @@ static Result s_on_call_expr(uint32_t target,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tcall %u", target);
-  sctx->println();
+  sctx->print("\t", "call ", target, "\n");
 
   return Result::Ok;
 }
@@ -987,7 +928,7 @@ static Result s_on_call_expr(uint32_t target,
 static Result s_on_drop_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tdrop\n");
+  sctx->print("\t", "drop", "\n");
 
   return Result::Ok;
 }
@@ -995,7 +936,7 @@ static Result s_on_drop_expr(void* user_data) {
 static Result s_on_else_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\telse\n");
+  sctx->print("\t", "else", "\n");
 
   return Result::Ok;
 }
@@ -1003,7 +944,7 @@ static Result s_on_else_expr(void* user_data) {
 static Result s_on_end_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tend\n");
+  sctx->print("\t", "end", "\n");
 
   return Result::Ok;
 }
@@ -1011,7 +952,7 @@ static Result s_on_end_expr(void* user_data) {
 static Result s_on_nop_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tnop\n");
+  sctx->print("\t", "nop", "\n");
 
   return Result::Ok;
 }
@@ -1019,7 +960,7 @@ static Result s_on_nop_expr(void* user_data) {
 static Result s_on_return_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\treturn\n");
+  sctx->print("\t", "return", "\n");
 
   return Result::Ok;
 }
@@ -1027,7 +968,7 @@ static Result s_on_return_expr(void* user_data) {
 static Result s_on_select_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tselect\n");
+  sctx->print("\t", "select", "\n");
 
   return Result::Ok;
 }
@@ -1035,7 +976,7 @@ static Result s_on_select_expr(void* user_data) {
 static Result s_on_current_memory_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tcurrent_memory\n");
+  sctx->print("\t", "current_memory", "\n");
 
   return Result::Ok;
 }
@@ -1043,7 +984,7 @@ static Result s_on_current_memory_expr(void* user_data) {
 static Result s_on_grow_memory_expr(void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printf("\tgrow_memory\n");
+  sctx->print("\t", "grow_memory", "\n");
 
   return Result::Ok;
 }
@@ -1052,8 +993,7 @@ static Result s_on_call_indirect_expr(uint32_t sig_index,
                                       void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tcall_indirect %u 0", sig_index);
-  sctx->println();
+  sctx->print("\t", "call_indirect ", sig_index, " 0", "\n");
 
   return Result::Ok;
 }
@@ -1062,8 +1002,7 @@ static Result s_on_get_global_expr(uint32_t global_index,
                                    void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tget_global %u", global_index);
-  sctx->println();
+  sctx->print("\t", "get_global ", global_index, "\n");
 
   return Result::Ok;
 }
@@ -1072,8 +1011,7 @@ static Result s_on_set_global_expr(uint32_t global_index,
                                    void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tset_global %u", global_index);
-  sctx->println();
+  sctx->print("\t", "set_global ", global_index, "\n");
 
   return Result::Ok;
 }
@@ -1082,8 +1020,7 @@ static Result s_on_get_local_expr(uint32_t local_index,
                                    void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tget_local %u", local_index);
-  sctx->println();
+  sctx->print("\t", "get_local ", local_index, "\n");
 
   return Result::Ok;
 }
@@ -1092,8 +1029,7 @@ static Result s_on_set_local_expr(uint32_t local_index,
                                    void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\tset_local %u", local_index);
-  sctx->println();
+  sctx->print("\t", "set_local ", local_index, "\n");
 
   return Result::Ok;
 }
@@ -1102,8 +1038,7 @@ static Result s_on_tee_local_expr(uint32_t local_index,
                                    void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\ttee_local %u", local_index);
-  sctx->println();
+  sctx->print("\t", "tee_local ", local_index, "\n");
 
   return Result::Ok;
 }
@@ -1113,20 +1048,20 @@ static Result s_begin_global(uint32_t index,
                              bool mutable_,
                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printf("\t.pushsection .wasm.chars.global_index.global\n");
-  sctx->printu("__s_global_%u:\n", index);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", ".pushsection .wasm.chars.global_index.global", "\n");
+  sctx->print("__s_global_", index, ":", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.chars.global\n");
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", ".pushsection .wasm.chars.global", "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
-  sctx->printf("\t.pushsection .wasm.payload.global\n");
-  sctx->print_type(type);
-  sctx->printu("\t.byte %u\n", mutable_ ? 1 : 0);
+  sctx->print("\t", ".pushsection .wasm.payload.global", "\n");
+  sctx->print(type);
+  sctx->print("\t", ".byte ", (mutable_ ? 1 : 0), "\n");
 
   return Result::Ok;
 }
@@ -1135,7 +1070,7 @@ static Result s_on_f32_const_expr(uint32_t value_bits, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
   float value;
   memcpy(&value, &value_bits, sizeof(value));
-  sctx->printf32("\tf32.const %.*g\n", DECIMAL_DIG, value);
+  sctx->print("\t", "f32.const ", value, "\n");
 
   return Result::Ok;
 }
@@ -1144,21 +1079,21 @@ static Result s_on_f64_const_expr(uint64_t value_bits, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
   double value;
   memcpy(&value, &value_bits, sizeof(value));
-  sctx->printf64("\tf64.const %.*g\n", DECIMAL_DIG, value);
+  sctx->print("\t", "f64.const ", value, "\n");
 
   return Result::Ok;
 }
 
 static Result s_on_i32_const_expr(uint32_t value, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printi32("\ti32.const %d\n", value);
+  sctx->print("\t", "i32.const ", int32_t(value), "\n");
 
   return Result::Ok;
 }
 
 static Result s_on_i64_const_expr(uint64_t value, void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printi64("\ti64.const %lld\n", value);
+  sctx->print("\t", "i64.const ", int64_t(value), "\n");
 
   return Result::Ok;
 }
@@ -1167,7 +1102,7 @@ static Result s_on_init_expr_get_global_expr(uint32_t index,
                                              uint32_t global_index,
                                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printu("\tget_global %u\n", global_index);
+  sctx->print("\t", "get_global ", global_index, "\n");
 
   return Result::Ok;
 }
@@ -1178,9 +1113,9 @@ static Result s_on_init_expr_f32_const_expr(uint32_t index,
   SContext* sctx = static_cast<SContext*>(user_data);
   float value;
   memcpy(&value, &value_bits, sizeof(value));
-  sctx->printf32("\t.float %.*g\n", DECIMAL_DIG, value);
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", ".float ", value, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -1191,9 +1126,9 @@ static Result s_on_init_expr_f64_const_expr(uint32_t index,
   SContext* sctx = static_cast<SContext*>(user_data);
   double value;
   memcpy(&value, &value_bits, sizeof(value));
-  sctx->printf64("\t.double %.*g\n", DECIMAL_DIG, value);
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", ".double ", value, "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -1202,10 +1137,10 @@ static Result s_on_init_expr_i32_const_expr(uint32_t index,
                                             uint32_t value,
                                             void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printi32("\ti32.const %d\n", value);
-  sctx->printf("\tend\n");
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", "i32.const ", int32_t(value), "\n");
+  sctx->print("\t", "end", "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -1214,9 +1149,9 @@ static Result s_on_init_expr_i64_const_expr(uint32_t index,
                                             uint64_t value,
                                             void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printi64("\t.di %lld\n", value);
-  sctx->printf("\t.popsection\n");
-  sctx->println();
+  sctx->print("\t", "i64.const ", int64_t(value), "\n");
+  sctx->print("\t", ".popsection", "\n");
+  sctx->print("\n");
 
   return Result::Ok;
 }
@@ -1226,8 +1161,11 @@ static Result s_on_data_segment_data(uint32_t index, const void* data,
 {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  for (uint32_t i = 0; i < size; i++)
-    sctx->printu("\t.byte 0x%02x\n", (static_cast<const uint8_t*>(data))[i]);
+  for (uint32_t i = 0; i < size; i++) {
+    sctx->print("\t");
+    sctx->printf(".byte 0x%02x", (static_cast<const uint8_t*>(data))[i]);
+    sctx->print("\n");
+  }
 
   return Result::Ok;
 }
@@ -1235,11 +1173,11 @@ static Result s_on_data_segment_data(uint32_t index, const void* data,
 static Result s_on_function_signatures_count(uint32_t count,
                                              void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
-  sctx->printf("\t.section .wasm.chars.function\n");
-  sctx->printu("\t.rept %u\n", count);
-  sctx->printf("\t.byte 0\n");
-  sctx->printf("\t.endr\n");
-  sctx->printf("\t.section .wasm.payload.function\n");
+  sctx->print("\t", ".section .wasm.chars.function", "\n");
+  sctx->print("\t", ".rept ", count, "\n");
+  sctx->print("\t", ".byte 0", "\n");
+  sctx->print("\t", ".endr", "\n");
+  sctx->print("\t", ".section .wasm.payload.function", "\n");
 
   return Result::Ok;
 }
@@ -1249,7 +1187,7 @@ static Result s_on_function_signature(uint32_t index,
                                       void* user_data) {
   SContext* sctx = static_cast<SContext*>(user_data);
 
-  sctx->printu("\trleb128_32 %u\n", sig_index);
+  sctx->print("\t", "rleb128_32 ", sig_index, "\n");
 
   return Result::Ok;
 }
