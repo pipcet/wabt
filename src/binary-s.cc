@@ -50,6 +50,8 @@ namespace wabt {
 typedef uint32_t Uint32;
 WABT_DEFINE_VECTOR(type, Type)
 WABT_DEFINE_VECTOR(uint32, Uint32);
+WABT_DEFINE_VECTOR(string_slice, StringSlice);
+WABT_DEFINE_VECTOR(ssvec, StringSliceVector);
 
 #define CALLBACK_CTX(member, ...)                                       \
   RAISE_ERROR_UNLESS(                                                   \
@@ -176,6 +178,153 @@ struct Signature {
     {}
 };
 
+struct OOLComment {
+  size_t offset;
+  virtual void print(FILE* f) = 0;
+};
+
+struct OOLC {
+  OOLComment* comment;
+  OOLC(OOLComment* comment)
+    : comment(comment) {}
+};
+
+struct OOLLocalComment : OOLComment {
+  uint32_t function_index;
+  uint32_t local_index;
+
+  OOLLocalComment(uint32_t function_index, uint32_t local_index)
+    : function_index(function_index), local_index(local_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+StringSliceVector gFunctionNames;
+StringSliceVector gGlobalNames;
+StringSliceVector gTableNames;
+StringSliceVector gMemoryNames;
+StringSliceVector gSignatureNames;
+StringSliceVectorVector gBlockNames;
+StringSliceVectorVector gLocalNames;
+
+void OOLLocalComment::print(FILE* f)
+{
+  if (gLocalNames.size > function_index) {
+    StringSliceVector* v = &gLocalNames.data[function_index];
+    if (v->size > local_index) {
+      fprintf(f, "# " PRIstringslice "\n", WABT_PRINTF_STRING_SLICE_ARG(v->data[local_index]));
+      return;
+    }
+  }
+
+  fprintf(f, "# local[%u]\n", local_index);
+}
+
+struct OOLFunctionComment : OOLComment {
+  uint32_t function_index;
+
+  OOLFunctionComment(uint32_t function_index)
+    : function_index(function_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+void OOLFunctionComment::print(FILE* f)
+{
+  if (gFunctionNames.size > function_index)
+    fprintf(f, "# " PRIstringslice "\n", WABT_PRINTF_STRING_SLICE_ARG(gFunctionNames.data[function_index]));
+  else
+    fprintf(f, "# func[%u]\n", function_index);
+}
+
+struct OOLGlobalComment : OOLComment {
+  uint32_t global_index;
+
+  OOLGlobalComment(uint32_t global_index)
+    : global_index(global_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+void OOLGlobalComment::print(FILE* f)
+{
+  if (gGlobalNames.size > global_index)
+    fprintf(f, "# " PRIstringslice "\n", WABT_PRINTF_STRING_SLICE_ARG(gGlobalNames.data[global_index]));
+  else
+    fprintf(f, "# global[%u]\n", global_index);
+}
+
+struct OOLTableComment : OOLComment {
+  uint32_t table_index;
+
+  OOLTableComment(uint32_t table_index)
+    : table_index(table_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+void OOLTableComment::print(FILE* f)
+{
+  if (gTableNames.size > table_index)
+    fprintf(f, "# " PRIstringslice "\n", WABT_PRINTF_STRING_SLICE_ARG(gTableNames.data[table_index]));
+  else
+    fprintf(f, "# table[%u]\n", table_index);
+}
+
+struct OOLSignatureComment : OOLComment {
+  uint32_t sig_index;
+
+  OOLSignatureComment(uint32_t sig_index)
+    : sig_index(sig_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+void OOLSignatureComment::print(FILE* f)
+{
+  if (gSignatureNames.size > sig_index)
+    fprintf(f, "# " PRIstringslice "\n", WABT_PRINTF_STRING_SLICE_ARG(gSignatureNames.data[sig_index]));
+  else
+    fprintf(f, "# sig[%u]\n", sig_index);
+}
+
+struct OOLMemoryComment : OOLComment {
+  uint32_t memory_index;
+
+  OOLMemoryComment(uint32_t memory_index)
+    : memory_index(memory_index)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+struct OOLAddressComment : OOLComment {
+  uint32_t address;
+
+  OOLAddressComment(uint32_t address)
+    : address(address)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+struct OOLBlockComment : OOLComment {
+  uint32_t depth;
+
+  OOLBlockComment(uint32_t depth)
+    : depth(depth)
+    {}
+
+  virtual void print(FILE* f) override;
+};
+
+WABT_DEFINE_VECTOR(oolc, OOLC);
+
 struct SContext {
 public:
   template<typename A, typename... As>
@@ -201,6 +350,15 @@ public:
   void print(const TypeChar);
   void print(const Type);
   void print(const char*);
+  void print(OOLComment*);
+  void print(OOLFunctionComment*);
+  void print(OOLLocalComment*);
+  void print(OOLBlockComment*);
+  void print(OOLAddressComment*);
+  void print(OOLGlobalComment*);
+  void print(OOLTableComment*);
+  void print(OOLMemoryComment*);
+  void print(OOLSignatureComment*);
 
   template<typename... As>
   void
@@ -214,6 +372,9 @@ public:
   void printi64(const char* format, long long);
   void prints(const char* format, int, const char*);
   FILE *f;
+  OOLCVector comments;
+  uint32_t function_index;
+  uint32_t depth;
 };
 
 void SContext::print(Opcode opcode)
@@ -331,6 +492,62 @@ void SContext::print(const char* s)
   printf("%s", s);
 }
 
+void SContext::print(OOLComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLFunctionComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLBlockComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLLocalComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLGlobalComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLMemoryComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLTableComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
+void SContext::print(OOLSignatureComment* comment)
+{
+  comment->offset = ftell(f);
+  OOLC oolc = OOLC(comment);
+  append_oolc_value(&comments, &oolc);
+}
+
 static Result s_begin_custom_section(BinaryReaderContext* ctx,
                                      uint32_t size,
                                      StringSlice section_name)
@@ -385,6 +602,46 @@ static Result s_on_signature(uint32_t index,
   sctx->print("\n");
   sctx->print("\t", ".popsection", "\n");
   sctx->print("\n");
+
+  {
+    char* buf = new char[3 + param_count + result_count];
+    char* p = buf;
+    *p++ = 'F';
+    for (uint32_t i = 0; i < param_count; i++)
+      switch(param_types[i]) {
+      case Type::I32:
+        *p++ = 'i'; break;
+      case Type::F32:
+        *p++ = 'l'; break;
+      case Type::I64:
+        *p++ = 'f'; break;
+      case Type::F64:
+        *p++ = 'd'; break;
+      default:
+        *p++ = '?'; break;
+      }
+    if (result_count)
+      for (uint32_t i = 0; i < result_count; i++)
+        switch(result_types[i]) {
+        case Type::I32:
+          *p++ = 'i'; break;
+        case Type::F32:
+          *p++ = 'l'; break;
+        case Type::I64:
+          *p++ = 'f'; break;
+        case Type::F64:
+          *p++ = 'd'; break;
+        default:
+          *p++ = '?'; break;
+        }
+    else
+      *p++ = 'v';
+    *p++ = 'E';
+    *p++ = 0;
+
+    StringSlice slice = string_slice_from_cstr(buf);
+    append_string_slice_value(&gSignatureNames, &slice);
+  }
 
   return Result::Ok;
 }
@@ -619,6 +876,40 @@ static Result s_on_export(uint32_t index,
   return Result::Ok;
 }
 
+
+static Result s_on_local_name(uint32_t function_index,
+                              uint32_t local_index,
+                              StringSlice name,
+                              void* user_data)
+{
+  while (gLocalNames.size <= function_index) {
+    StringSliceVector* ssvec = new StringSliceVector();
+    WABT_ZERO_MEMORY(*ssvec);
+    append_ssvec_value(&gLocalNames, ssvec);
+  }
+  StringSliceVector* ssvec = &gLocalNames.data[function_index];
+  while (ssvec->size < local_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(ssvec, &slice);
+  }
+  append_string_slice_value(ssvec, &name);
+
+  return Result::Ok;
+}
+
+static Result s_on_function_name(uint32_t function_index,
+                                 StringSlice name,
+                                 void* user_data)
+{
+  while (gFunctionNames.size < function_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(&gFunctionNames, &slice);
+  }
+  append_string_slice_value(&gFunctionNames, &name);
+
+  return Result::Ok;
+}
+
 static Result s_on_local_decl_count(uint32_t count,
                                     void* user_data)
 {
@@ -765,11 +1056,14 @@ static Result s_begin_function_body(BinaryReaderContext* ctx,
 
   sctx->print("\t", ".pushsection .wasm.chars.code", "\n");
   sctx->print("__s_body_", function_index, ":", "\n");
+  sctx->print(new OOLFunctionComment(function_index));
   sctx->print("\t", ".byte 0", "\n");
   sctx->print("\t", ".popsection", "\n");
   sctx->print("\t", "rleb128_32 __s_endbody_", function_index, " - ");
   sctx->print("__s_startbody_", function_index, "\n");
   sctx->print("__s_startbody_", function_index, ":", "\n");
+
+  sctx->function_index = function_index;
 
   return Result::Ok;
 }
@@ -852,6 +1146,7 @@ static Result s_on_elem_segment_function_index(uint32_t index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "rleb128_32 ", function_index, "", "\n");
+  sctx->print(new OOLFunctionComment(function_index));
 
   return Result::Ok;
 }
@@ -994,6 +1289,8 @@ static Result s_on_call_indirect_expr(uint32_t sig_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "call_indirect ", sig_index, " 0", "\n");
+  sctx->print(new OOLTableComment(0));
+  sctx->print(new OOLSignatureComment(sig_index));
 
   return Result::Ok;
 }
@@ -1003,6 +1300,7 @@ static Result s_on_get_global_expr(uint32_t global_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "get_global ", global_index, "\n");
+  sctx->print(new OOLGlobalComment(global_index));
 
   return Result::Ok;
 }
@@ -1012,6 +1310,7 @@ static Result s_on_set_global_expr(uint32_t global_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "set_global ", global_index, "\n");
+  sctx->print(new OOLGlobalComment(global_index));
 
   return Result::Ok;
 }
@@ -1021,6 +1320,7 @@ static Result s_on_get_local_expr(uint32_t local_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "get_local ", local_index, "\n");
+  sctx->print(new OOLLocalComment(sctx->function_index, local_index));
 
   return Result::Ok;
 }
@@ -1030,6 +1330,7 @@ static Result s_on_set_local_expr(uint32_t local_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "set_local ", local_index, "\n");
+  sctx->print(new OOLLocalComment(sctx->function_index, local_index));
 
   return Result::Ok;
 }
@@ -1039,6 +1340,7 @@ static Result s_on_tee_local_expr(uint32_t local_index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "tee_local ", local_index, "\n");
+  sctx->print(new OOLLocalComment(sctx->function_index, local_index));
 
   return Result::Ok;
 }
@@ -1314,19 +1616,9 @@ n;
   s_reader.end_data_segment_init_expr = s_end_data_segment_init_expr;
   s_reader.end_data_segment = s_end_data_segment;
   s_reader.end_data_section = s_end_data_section;
-
-  s_reader.begin_names_section = s_begin_names_section;
-  s_reader.on_function_names_count = s_on_function_names_count;
-  s_reader.on_function_name = s_on_function_name;
-  s_reader.on_local_names_count = s_on_local_names_count;
-  s_reader.on_local_name = s_on_local_name;
-  s_reader.end_names_section = s_end_names_section;
-
-  s_reader.begin_reloc_section = s_begin_reloc_section;
-  s_reader.on_reloc_count = s_on_reloc_count;
-  s_reader.end_reloc_section = s_end_reloc_section;
-
 #endif
+  s_reader.on_function_name = s_on_function_name;
+  s_reader.on_local_name = s_on_local_name;
   s_reader.on_data_segment_data = s_on_data_segment_data;
   s_reader.on_init_expr_get_global_expr = s_on_init_expr_get_global_expr;
   s_reader.on_init_expr_f32_const_expr = s_on_init_expr_f32_const_expr;
@@ -1336,6 +1628,14 @@ n;
   s_reader.begin_data_section = s_begin_data_section;
 
   read_binary(data, size, &s_reader, 1, options);
+
+  if (false)
+    for (uint32_t i = 0; i < sctx.comments.size; i++) {
+      OOLComment* c = sctx.comments.data[i].comment;
+      fprintf(sctx.f, "# %ld: ", long(c->offset));
+      c->print(sctx.f);
+    }
+
   return Result::Ok;
 }
 
