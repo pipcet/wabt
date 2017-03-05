@@ -587,8 +587,13 @@ static Result on_function_name(uint32_t index,
   Context* ctx = static_cast<Context*>(user_data);
   print_details(ctx, " - func[%d] " PRIstringslice "\n", index,
                 WABT_PRINTF_STRING_SLICE_ARG(name));
-  if (ctx->options->mode == ObjdumpMode::Prepass)
+  if (ctx->options->mode == ObjdumpMode::Prepass) {
+    while (ctx->options->function_names.size < index) {
+      StringSlice empty = empty_string_slice();
+      append_string_slice_value(&ctx->options->function_names, &empty);
+    }
     append_string_slice_value(&ctx->options->function_names, &name);
+  }
   return Result::Ok;
 }
 
