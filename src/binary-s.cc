@@ -533,6 +533,7 @@ static Result s_on_signature(uint32_t index,
   sctx->print("\t", "signature ");
   sctx->print(Signature(param_count, param_types, result_count, result_types));
   sctx->print("\n");
+  sctx->print(new OOLSignatureComment(index));
   sctx->print("\t", ".popsection", "\n");
   sctx->print("\n");
 
@@ -590,6 +591,85 @@ static Result s_begin_import_section(BinaryReaderContext* ctx, uint32_t size)
 
 static bool in_hidden_global_hack = false;
 
+static StringSlice modfield(StringSlice mod, StringSlice field)
+{
+  char *str;
+  asprintf(&str, PRIstringslice "." PRIstringslice, WABT_PRINTF_STRING_SLICE_ARG(mod), WABT_PRINTF_STRING_SLICE_ARG(field));
+  return string_slice_from_cstr(str);
+}
+
+static Result s_on_local_name(uint32_t function_index,
+                              uint32_t local_index,
+                              StringSlice name,
+                              void* user_data)
+{
+  while (gLocalNames.size <= function_index) {
+    StringSliceVector* ssvec = new StringSliceVector();
+    WABT_ZERO_MEMORY(*ssvec);
+    append_ssvec_value(&gLocalNames, ssvec);
+  }
+  StringSliceVector* ssvec = &gLocalNames.data[function_index];
+  while (ssvec->size < local_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(ssvec, &slice);
+  }
+  append_string_slice_value(ssvec, &name);
+
+  return Result::Ok;
+}
+
+static Result s_on_function_name(uint32_t function_index,
+                                 StringSlice name,
+                                 void* user_data)
+{
+  while (gFunctionNames.size < function_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(&gFunctionNames, &slice);
+  }
+  append_string_slice_value(&gFunctionNames, &name);
+
+  return Result::Ok;
+}
+
+static Result s_on_global_name(uint32_t global_index,
+                               StringSlice name,
+                               void* user_data)
+{
+  while (gGlobalNames.size < global_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(&gGlobalNames, &slice);
+  }
+  append_string_slice_value(&gGlobalNames, &name);
+
+  return Result::Ok;
+}
+
+static Result s_on_table_name(uint32_t table_index,
+                               StringSlice name,
+                               void* user_data)
+{
+  while (gTableNames.size < table_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(&gTableNames, &slice);
+  }
+  append_string_slice_value(&gTableNames, &name);
+
+  return Result::Ok;
+}
+
+static Result s_on_memory_name(uint32_t memory_index,
+                               StringSlice name,
+                               void* user_data)
+{
+  while (gMemoryNames.size < memory_index) {
+    StringSlice slice = empty_string_slice();
+    append_string_slice_value(&gMemoryNames, &slice);
+  }
+  append_string_slice_value(&gMemoryNames, &name);
+
+  return Result::Ok;
+}
+
 static Result s_on_import(uint32_t index,
                           StringSlice module_name,
                           StringSlice field_name,
@@ -646,12 +726,16 @@ static Result s_on_import_func(uint32_t index,
   sctx->print("\t", ".pushsection .wasm.payload.import", "\n");
   sctx->print("\t", ".byte 0 # function", "\n");
   sctx->print("\t", "rleb128_32 __s_type_", sig_index, "\n");
+  sctx->print(new OOLSignatureComment(sig_index));
   sctx->print("\t", ".popsection", "\n");
   sctx->print("\n");
 
   if (in_hidden_global_hack) {
     sctx->print("\t", ".endif", "\n");
   }
+
+  StringSlice name = modfield(module_name, field_name);
+  s_on_function_name(function_index, name, user_data);
 
   return Result::Ok;
 }
@@ -683,6 +767,9 @@ static Result s_on_import_table(uint32_t index,
     sctx->print("\t", ".endif", "\n");
   }
 
+  StringSlice name = modfield(module_name, field_name);
+  s_on_table_name(table_index, name, user_data);
+
   return Result::Ok;
 }
 
@@ -710,6 +797,9 @@ static Result s_on_import_memory(uint32_t index,
   if (in_hidden_global_hack) {
     sctx->print("\t", ".endif", "\n");
   }
+
+  StringSlice name = modfield(module_name, field_name);
+  s_on_memory_name(memory_index, name, user_data);
 
   return Result::Ok;
 }
@@ -740,6 +830,9 @@ static Result s_on_import_global(uint32_t index,
   if (in_hidden_global_hack) {
     sctx->print("\t", ".endif", "\n");
   }
+
+  StringSlice name = modfield(module_name, field_name);
+  s_on_global_name(global_index, name, user_data);
 
   return Result::Ok;
 }
@@ -817,39 +910,6 @@ static Result s_on_export(uint32_t index,
   return Result::Ok;
 }
 
-
-static Result s_on_local_name(uint32_t function_index,
-                              uint32_t local_index,
-                              StringSlice name,
-                              void* user_data)
-{
-  while (gLocalNames.size <= function_index) {
-    StringSliceVector* ssvec = new StringSliceVector();
-    WABT_ZERO_MEMORY(*ssvec);
-    append_ssvec_value(&gLocalNames, ssvec);
-  }
-  StringSliceVector* ssvec = &gLocalNames.data[function_index];
-  while (ssvec->size < local_index) {
-    StringSlice slice = empty_string_slice();
-    append_string_slice_value(ssvec, &slice);
-  }
-  append_string_slice_value(ssvec, &name);
-
-  return Result::Ok;
-}
-
-static Result s_on_function_name(uint32_t function_index,
-                                 StringSlice name,
-                                 void* user_data)
-{
-  while (gFunctionNames.size < function_index) {
-    StringSlice slice = empty_string_slice();
-    append_string_slice_value(&gFunctionNames, &slice);
-  }
-  append_string_slice_value(&gFunctionNames, &name);
-
-  return Result::Ok;
-}
 
 static Result s_on_local_decl_count(uint32_t count,
                                     void* user_data)
@@ -1157,6 +1217,7 @@ static Result s_on_call_expr(uint32_t target,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "call ", target, "\n");
+  sctx->print(new OOLFunctionComment(target));
 
   return Result::Ok;
 }
@@ -1431,6 +1492,7 @@ static Result s_on_function_signature(uint32_t index,
   SContext* sctx = static_cast<SContext*>(user_data);
 
   sctx->print("\t", "rleb128_32 ", sig_index, "\n");
+  sctx->print(new OOLSignatureComment(sig_index));
 
   return Result::Ok;
 }
