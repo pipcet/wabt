@@ -266,6 +266,11 @@ if (NOT EMSCRIPTEN)
   add_dependencies(everything wasmdump)
   target_link_libraries(wasmdump libwabt)
 
+  # wasm2s
+  add_executable(wasm2s src/tools/wasm2s.cc src/binary-reader.cc src/binary-s.cc)
+  add_dependencies(everything wasm2s)
+  target_link_libraries(wasm2s libwabt)
+
   # wasm-link
   add_executable(wasm-link src/tools/wasm-link.cc src/binary-reader-linker.cc)
   add_dependencies(everything wasm-link)
@@ -339,7 +344,7 @@ if (NOT EMSCRIPTEN)
 
   # install
   install(
-    TARGETS wast2wasm wasm2wast wasm-interp wasmopcodecnt wasmdump wast-desugar
+    TARGETS wast2wasm wasm2wast wasm2s wasm-interp wasmopcodecnt wasmdump wast-desugar
         wasm-link
     DESTINATION bin
   )
