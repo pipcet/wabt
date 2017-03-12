@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <algorithm>
+
 #include "ast-parser.h"
 #include "ast-parser-lexer-shared.h"
 #include "binary-reader-ast.h"
@@ -28,26 +30,28 @@
 
 #define INVALID_VAR_INDEX (-1)
 
-#define RELOCATE_STACK(type, array, stack_base, old_byte_size, new_size)      \
-  do {                                                                        \
-    if ((stack_base) == (array)) {                                            \
-      (stack_base) =                                                          \
-          static_cast<type*>(wabt_alloc((new_size) * sizeof(*(stack_base)))); \
-      memcpy((stack_base), (array), old_byte_size);                           \
-    } else {                                                                  \
-      (stack_base) = static_cast<type*>(                                      \
-          wabt_realloc((stack_base), (new_size) * sizeof(*(stack_base))));    \
-    }                                                                         \
-    /* Cache the pointer in the parser struct to be free'd later. */          \
-    parser->array = (stack_base);                                             \
+#define RELOCATE_STACK(type, array, stack_base, old_size, new_size)   \
+  do {                                                                \
+    type* new_stack = new type[new_size]();                           \
+    std::move((stack_base), (stack_base) + (old_size), (new_stack));  \
+    if ((stack_base) != (array)) {                                    \
+      delete[](stack_base);                                           \
+    } else {                                                          \
+      for (size_t i = 0; i < (old_size); ++i) {                       \
+        (stack_base)[i].~type();                                      \
+      }                                                               \
+    }                                                                 \
+    /* Cache the pointer in the parser struct to be deleted later. */ \
+    parser->array = (stack_base) = new_stack;                         \
   } while (0)
 
 #define yyoverflow(message, ss, ss_size, vs, vs_size, ls, ls_size, new_size) \
   do {                                                                       \
+    size_t old_size = *(new_size);                                           \
     *(new_size) *= 2;                                                        \
-    RELOCATE_STACK(yytype_int16, yyssa, *(ss), (ss_size), *(new_size));      \
-    RELOCATE_STACK(YYSTYPE, yyvsa, *(vs), (vs_size), *(new_size));           \
-    RELOCATE_STACK(YYLTYPE, yylsa, *(ls), (ls_size), *(new_size));           \
+    RELOCATE_STACK(yytype_int16, yyssa, *(ss), old_size, *(new_size));       \
+    RELOCATE_STACK(YYSTYPE, yyvsa, *(vs), old_size, *(new_size));            \
+    RELOCATE_STACK(YYLTYPE, yylsa, *(ls), old_size, *(new_size));            \
   } while (0)
 
 #define DUPTEXT(dst, src)                                \
@@ -135,8 +139,8 @@
     }                                                                      \
   } while (0)
 
-#define YYMALLOC(size) wabt_alloc(size)
-#define YYFREE(p) wabt_free(p)
+#define YYMALLOC(size) new char [size]
+#define YYFREE(p) delete [] (p)
 
 #define USE_NATURAL_ALIGNMENT (~0)
 
@@ -147,36 +151,19 @@ ExprList join_exprs2(Location* loc,
                          ExprList* expr1,
                          Expr* expr2);
 
-FuncField* new_func_field(void) {
-  return static_cast<FuncField*>(wabt_alloc_zero(sizeof(FuncField)));
-}
-
-Func* new_func(void) {
-  return static_cast<Func*>(wabt_alloc_zero(sizeof(Func)));
-}
-
-Command* new_command(void) {
-  return static_cast<Command*>(wabt_alloc_zero(sizeof(Command)));
-}
-
-Module* new_module(void) {
-  return static_cast<Module*>(wabt_alloc_zero(sizeof(Module)));
-}
-
-Import* new_import(void) {
-  return static_cast<Import*>(wabt_alloc_zero(sizeof(Import)));
-}
-
-TextListNode* new_text_list_node(void) {
-  return static_cast<TextListNode*>(wabt_alloc_zero(sizeof(TextListNode)));
-}
+FuncField* new_func_field(void) { return new FuncField(); }
+Func* new_func(void) { return new Func(); }
+Command* new_command(void) { return new Command(); }
+Module* new_module(void) { return new Module(); }
+Import* new_import(void) { return new Import(); }
+TextListNode* new_text_list_node(void) { return new TextListNode(); }
 
 Result parse_const(Type type,
                        LiteralType literal_type,
                        const char* s,
                        const char* end,
                        Const* out);
-void dup_text_list(TextList* text_list, void** out_data, size_t* out_size);
+void dup_text_list(TextList* text_list, char** out_data, size_t* out_size);
 
 bool is_empty_signature(FuncSignature* sig);
 
@@ -271,7 +258,7 @@ static void on_read_binary_error(uint32_t offset, const char* error,
  * memory is shared with the lexer, so should not be destroyed. */
 %destructor {} ALIGN_EQ_NAT OFFSET_EQ_NAT TEXT VAR NAT INT FLOAT
 %destructor { destroy_block(&$$); } <block>
-%destructor { destroy_command($$); wabt_free($$); } <command>
+%destructor { destroy_command($$); delete $$; } <command>
 %destructor { destroy_command_vector_and_elements(&$$); } <commands>
 %destructor { destroy_const_vector(&$$); } <consts>
 %destructor { destroy_elem_segment(&$$); } <elem_segment>
@@ -282,12 +269,12 @@ static void on_read_binary_error(uint32_t offset, const char* error,
 %destructor { destroy_expr($$); } <expr>
 %destructor { destroy_expr_list($$.first); } <expr_list>
 %destructor { destroy_func_fields($$); } <func_fields>
-%destructor { destroy_func($$); wabt_free($$); } <func>
+%destructor { destroy_func($$); delete $$; } <func>
 %destructor { destroy_func_signature(&$$); } <func_sig>
 %destructor { destroy_func_type(&$$); } <func_type>
-%destructor { destroy_import($$); wabt_free($$); } <import>
+%destructor { destroy_import($$); delete $$; } <import>
 %destructor { destroy_data_segment(&$$); } <data_segment>
-%destructor { destroy_module($$); wabt_free($$); } <module>
+%destructor { destroy_module($$); delete $$; } <module>
 %destructor { destroy_raw_module(&$$); } <raw_module>
 %destructor { destroy_string_slice(&$$.text); } <literal>
 %destructor { destroy_script(&$$); } <script>
@@ -336,10 +323,10 @@ quoted_text :
       TextList text_list;
       text_list.first = &node;
       text_list.last = &node;
-      void* data;
+      char* data;
       size_t size;
       dup_text_list(&text_list, &data, &size);
-      $$.start = static_cast<const char*>(data);
+      $$.start = data;
       $$.length = size;
     }
 ;
@@ -577,7 +564,7 @@ plain_instr :
                               "invalid literal \"" PRIstringslice "\"",
                               WABT_PRINTF_STRING_SLICE_ARG($2.text));
       }
-      wabt_free(const_cast<char*>($2.text.start));
+      delete [] $2.text.start;
     }
   | UNARY {
       $$ = new_unary_expr();
@@ -818,7 +805,7 @@ func_info :
         }
 
         /* we steal memory from the func field, but not the linked list nodes */
-        wabt_free(field);
+        delete (field);
         field = next;
       }
     }
@@ -1197,7 +1184,7 @@ module_fields :
       APPEND_ITEM_TO_VECTOR($$, Func, func, funcs, &field->func);
       INSERT_BINDING($$, func, funcs, @2, $2.func->name);
       APPEND_INLINE_EXPORT($$, Func, @2, $2, $$->funcs.size - 1);
-      wabt_free($2.func);
+      delete $2.func;
     }
   | module_fields elem {
       $$ = $1;
@@ -1252,7 +1239,7 @@ module_fields :
           $$->num_global_imports++;
           break;
       }
-      wabt_free($2);
+      delete $2;
       APPEND_ITEM_TO_VECTOR($$, Import, import, imports, &field->import);
     }
   | module_fields export {
@@ -1273,8 +1260,7 @@ raw_module :
 
       /* resolve func type variables where the signature was not specified
        * explicitly */
-      size_t i;
-      for (i = 0; i < $4->funcs.size; ++i) {
+      for (size_t i = 0; i < $4->funcs.size; ++i) {
         Func* func = $4->funcs.data[i];
         if (decl_has_func_type(&func->decl) &&
             is_empty_signature(&func->decl.sig)) {
@@ -1313,7 +1299,7 @@ module :
         error_handler.user_data = &user_data;
         read_binary_ast($1.binary.data, $1.binary.size, &options,
                              &error_handler, $$);
-        wabt_free($1.binary.data);
+        delete [] $1.binary.data;
         $$->name = $1.binary.name;
         $$->loc = $1.binary.loc;
       }
@@ -1414,7 +1400,7 @@ cmd :
       $$ = new_command();
       $$->type = CommandType::Module;
       $$->module = *$1;
-      wabt_free($1);
+      delete $1;
     }
   | LPAR REGISTER quoted_text script_var_opt RPAR {
       $$ = new_command();
@@ -1429,7 +1415,7 @@ cmd_list :
   | cmd_list cmd {
       $$ = $1;
       append_command_value(&$$, $2);
-      wabt_free($2);
+      delete $2;
     }
 ;
 
@@ -1442,7 +1428,7 @@ const :
                               "invalid literal \"" PRIstringslice "\"",
                               WABT_PRINTF_STRING_SLICE_ARG($3.text));
       }
-      wabt_free(const_cast<char*>($3.text.start));
+      delete [] $3.text.start;
     }
 ;
 const_list :
@@ -1459,8 +1445,7 @@ script :
       $$.commands = $1;
 
       int last_module_index = -1;
-      size_t i;
-      for (i = 0; i < $$.commands.size; ++i) {
+      for (size_t i = 0; i < $$.commands.size; ++i) {
         Command* command = &$$.commands.data[i];
         Var* module_var = nullptr;
         switch (command->type) {
@@ -1631,11 +1616,10 @@ size_t copy_string_contents(StringSlice* text, char* dest) {
   return dest - dest_start;
 }
 
-void dup_text_list(TextList* text_list, void** out_data, size_t* out_size) {
+void dup_text_list(TextList* text_list, char** out_data, size_t* out_size) {
   /* walk the linked list to see how much total space is needed */
   size_t total_size = 0;
-  TextListNode* node;
-  for (node = text_list->first; node; node = node->next) {
+  for (TextListNode* node = text_list->first; node; node = node->next) {
     /* Always allocate enough space for the entire string including the escape
      * characters. It will only get shorter, and this way we only have to
      * iterate through the string once. */
@@ -1644,9 +1628,9 @@ void dup_text_list(TextList* text_list, void** out_data, size_t* out_size) {
     size_t size = (end > src) ? (end - src) : 0;
     total_size += size;
   }
-  char* result = (char*)wabt_alloc(total_size);
+  char* result = new char [total_size];
   char* dest = result;
-  for (node = text_list->first; node; node = node->next) {
+  for (TextListNode* node = text_list->first; node; node = node->next) {
     size_t actual_size = copy_string_contents(&node->text, dest);
     dest += actual_size;
   }
@@ -1683,9 +1667,9 @@ Result parse_ast(AstLexer * lexer, struct Script * out_script,
   WABT_ZERO_MEMORY(parser);
   parser.error_handler = error_handler;
   int result = wabt_ast_parser_parse(lexer, &parser);
-  wabt_free(parser.yyssa);
-  wabt_free(parser.yyvsa);
-  wabt_free(parser.yylsa);
+  delete [] parser.yyssa;
+  delete [] parser.yyvsa;
+  delete [] parser.yylsa;
   *out_script = parser.script;
   return result == 0 && parser.errors == 0 ? Result::Ok : Result::Error;
 }

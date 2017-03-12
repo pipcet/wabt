@@ -46,9 +46,6 @@ struct Context {
   uint32_t section_starts[kBinarySectionCount];
   BinarySection reloc_section;
 
-  StringSlice import_module_name;
-  StringSlice import_field_name;
-
   uint32_t next_reloc;
 };
 
@@ -214,21 +211,20 @@ static void log_opcode(Context* ctx,
   // Print binary data
   printf(" %06" PRIzx ": %02x", offset - 1,
          static_cast<unsigned>(ctx->current_opcode));
-  size_t i;
-  for (i = 0; i < data_size && i < IMMEDIATE_OCTET_COUNT; i++, offset++) {
+  for (size_t i = 0; i < data_size && i < IMMEDIATE_OCTET_COUNT;
+       i++, offset++) {
     printf(" %02x", data[offset]);
   }
-  for (i = data_size + 1; i < IMMEDIATE_OCTET_COUNT; i++) {
+  for (size_t i = data_size + 1; i < IMMEDIATE_OCTET_COUNT; i++) {
     printf("   ");
   }
   printf(" | ");
 
   // Print disassemble
-  int j;
   int indent_level = ctx->indent_level;
   if (ctx->current_opcode == Opcode::Else)
     indent_level--;
-  for (j = 0; j < indent_level; j++) {
+  for (int j = 0; j < indent_level; j++) {
     printf("  ");
   }
 
@@ -370,8 +366,7 @@ static Result on_signature(uint32_t index,
   if (!should_print_details(ctx))
     return Result::Ok;
   printf(" - [%d] (", index);
-  uint32_t i;
-  for (i = 0; i < param_count; i++) {
+  for (uint32_t i = 0; i < param_count; i++) {
     if (i != 0) {
       printf(", ");
     }
@@ -412,17 +407,9 @@ static Result begin_function_body(BinaryReaderContext* context,
   return Result::Ok;
 }
 
-static Result on_import(uint32_t index,
-                        StringSlice module_name,
-                        StringSlice field_name,
-                        void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  ctx->import_module_name = module_name;
-  ctx->import_field_name = field_name;
-  return Result::Ok;
-}
-
 static Result on_import_func(uint32_t import_index,
+                             StringSlice module_name,
+                             StringSlice field_name,
                              uint32_t func_index,
                              uint32_t sig_index,
                              void* user_data) {
@@ -430,12 +417,14 @@ static Result on_import_func(uint32_t import_index,
   print_details(ctx,
                 " - func[%d] sig=%d <- " PRIstringslice "." PRIstringslice "\n",
                 func_index, sig_index,
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_module_name),
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_field_name));
+                WABT_PRINTF_STRING_SLICE_ARG(module_name),
+                WABT_PRINTF_STRING_SLICE_ARG(field_name));
   return Result::Ok;
 }
 
 static Result on_import_table(uint32_t import_index,
+                              StringSlice module_name,
+                              StringSlice field_name,
                               uint32_t table_index,
                               Type elem_type,
                               const Limits* elem_limits,
@@ -444,24 +433,28 @@ static Result on_import_table(uint32_t import_index,
   print_details(
       ctx, " - " PRIstringslice "." PRIstringslice
            " -> table elem_type=%s init=%" PRId64 " max=%" PRId64 "\n",
-      WABT_PRINTF_STRING_SLICE_ARG(ctx->import_module_name),
-      WABT_PRINTF_STRING_SLICE_ARG(ctx->import_field_name),
+      WABT_PRINTF_STRING_SLICE_ARG(module_name),
+      WABT_PRINTF_STRING_SLICE_ARG(field_name),
       get_type_name(elem_type), elem_limits->initial, elem_limits->max);
   return Result::Ok;
 }
 
 static Result on_import_memory(uint32_t import_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                uint32_t memory_index,
                                const Limits* page_limits,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   print_details(ctx, " - " PRIstringslice "." PRIstringslice " -> memory\n",
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_module_name),
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_field_name));
+                WABT_PRINTF_STRING_SLICE_ARG(module_name),
+                WABT_PRINTF_STRING_SLICE_ARG(field_name));
   return Result::Ok;
 }
 
 static Result on_import_global(uint32_t import_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                uint32_t global_index,
                                Type type,
                                bool mutable_,
@@ -470,8 +463,8 @@ static Result on_import_global(uint32_t import_index,
   print_details(ctx, " - global[%d] %s mutable=%d <- " PRIstringslice
                      "." PRIstringslice "\n",
                 global_index, get_type_name(type), mutable_,
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_module_name),
-                WABT_PRINTF_STRING_SLICE_ARG(ctx->import_field_name));
+                WABT_PRINTF_STRING_SLICE_ARG(module_name),
+                WABT_PRINTF_STRING_SLICE_ARG(field_name));
   return Result::Ok;
 }
 
@@ -593,7 +586,9 @@ static Result on_function_name(uint32_t index,
       StringSlice empty = empty_string_slice();
       append_string_slice_value(&ctx->options->function_names, &empty);
     }
-    append_string_slice_value(&ctx->options->function_names, &name);
+    if (ctx->options->function_names.size == index) {
+      append_string_slice_value(&ctx->options->function_names, &name);
+    }
   }
   return Result::Ok;
 }
@@ -699,7 +694,6 @@ Result read_binary_objdump(const uint8_t* data,
 
     // Import section
     reader.on_import_count = on_count;
-    reader.on_import = on_import;
     reader.on_import_func = on_import_func;
     reader.on_import_table = on_import_table;
     reader.on_import_memory = on_import_memory;
@@ -771,6 +765,7 @@ Result read_binary_objdump(const uint8_t* data,
 
   ReadBinaryOptions read_options = WABT_READ_BINARY_OPTIONS_DEFAULT;
   read_options.read_debug_names = true;
+  read_options.log_stream = options->log_stream;
   return read_binary(data, size, &reader, 1, &read_options);
 }
 

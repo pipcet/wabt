@@ -27,8 +27,6 @@ struct Context {
   LinkerInputBinary* binary;
 
   Section* reloc_section;
-
-  StringSlice import_name;
   Section* current_section;
 };
 
@@ -42,8 +40,7 @@ static Result on_reloc_count(uint32_t count,
     WABT_FATAL("relocation for custom sections not yet supported\n");
   }
 
-  uint32_t i;
-  for (i = 0; i < binary->sections.size; i++) {
+  for (uint32_t i = 0; i < binary->sections.size; i++) {
     Section* sec = &binary->sections.data[i];
     if (sec->section_code != section_code)
       continue;
@@ -73,23 +70,23 @@ static Result on_import(uint32_t index,
                         StringSlice module_name,
                         StringSlice field_name,
                         void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
   if (!string_slice_eq_cstr(&module_name, WABT_LINK_MODULE_NAME)) {
     WABT_FATAL("unsupported import module: " PRIstringslice,
                WABT_PRINTF_STRING_SLICE_ARG(module_name));
   }
-  ctx->import_name = field_name;
   return Result::Ok;
 }
 
 static Result on_import_func(uint32_t import_index,
+                             StringSlice module_name,
+                             StringSlice field_name,
                              uint32_t global_index,
                              uint32_t sig_index,
                              void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   FunctionImport* import =
       append_function_import(&ctx->binary->function_imports);
-  import->name = ctx->import_name;
+  import->name = field_name;
   import->sig_index = sig_index;
   import->active = true;
   ctx->binary->active_function_imports++;
@@ -97,13 +94,15 @@ static Result on_import_func(uint32_t import_index,
 }
 
 static Result on_import_global(uint32_t import_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                uint32_t global_index,
                                Type type,
                                bool mutable_,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
   GlobalImport* import = append_global_import(&ctx->binary->global_imports);
-  import->name = ctx->import_name;
+  import->name = field_name;
   import->type = type;
   import->mutable_ = mutable_;
   ctx->binary->active_global_imports++;
@@ -151,16 +150,33 @@ static Result begin_custom_section(BinaryReaderContext* ctx,
 
   /* Special handling for certain CUSTOM sections */
   if (string_slice_eq_cstr(&section_name, "name")) {
+    uint32_t name_type;
     size_t bytes_read = read_u32_leb128(
-        &binary->data[sec->offset], &binary->data[binary->size], &sec->count);
+        &binary->data[sec->offset], &binary->data[binary->size], &name_type);
+
+    if (static_cast<NameSectionSubsection>(name_type) != NameSectionSubsection::Function) {
+      WABT_FATAL("no function name section");
+    }
+
+    sec->payload_offset += bytes_read;
+    sec->payload_size -= bytes_read;
+
+    uint32_t subsection_size;
+    bytes_read = read_u32_leb128(
+        &binary->data[sec->offset], &binary->data[binary->size], &subsection_size);
+
+    sec->payload_offset += bytes_read;
+    sec->payload_size -= bytes_read;
+
+    bytes_read = read_u32_leb128(
+        &binary->data[sec->payload_offset], &binary->data[binary->size], &sec->count);
     sec->payload_offset += bytes_read;
     sec->payload_size -= bytes_read;
 
     /* We don't currently support merging name sections unless they contain
      * a name for every function. */
-    size_t i;
     uint32_t total_funcs = binary->function_imports.size;
-    for (i = 0; i < binary->sections.size; i++) {
+    for (size_t i = 0; i < binary->sections.size; i++) {
       if (binary->sections.data[i].section_code == BinarySection::Function) {
         total_funcs += binary->sections.data[i].count;
         break;
@@ -261,11 +277,18 @@ static Result on_function_name(uint32_t index,
                                StringSlice name,
                                void* user_data) {
   Context* ctx = static_cast<Context*>(user_data);
-  append_string_slice_value(&ctx->binary->debug_names, &name);
+  while (ctx->binary->debug_names.size < index) {
+    StringSlice empty = empty_string_slice();
+    append_string_slice_value(&ctx->binary->debug_names, &empty);
+  }
+  if (ctx->binary->debug_names.size == index) {
+    append_string_slice_value(&ctx->binary->debug_names, &name);
+  }
   return Result::Ok;
 }
 
-Result read_binary_linker(LinkerInputBinary* input_info) {
+Result read_binary_linker(LinkerInputBinary* input_info,
+                          LinkOptions* options) {
   Context context;
   WABT_ZERO_MEMORY(context);
   context.binary = input_info;
@@ -300,6 +323,7 @@ Result read_binary_linker(LinkerInputBinary* input_info) {
 
   ReadBinaryOptions read_options = WABT_READ_BINARY_OPTIONS_DEFAULT;
   read_options.read_debug_names = true;
+  read_options.log_stream = options->log_stream;
   return read_binary(input_info->data, input_info->size, &reader, 1,
                      &read_options);
 }

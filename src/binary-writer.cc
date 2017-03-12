@@ -268,7 +268,7 @@ static void begin_known_section(Context* ctx,
                                 size_t leb_size_guess) {
   assert(ctx->last_section_leb_size_guess == 0);
   char desc[100];
-  snprintf(desc, sizeof(desc), "section \"%s\" (%u)",
+  wabt_snprintf(desc, sizeof(desc), "section \"%s\" (%u)",
            get_section_name(section_code), static_cast<unsigned>(section_code));
   write_header(ctx, desc, PRINT_HEADER_NO_INDEX);
   write_u8_enum(&ctx->stream, section_code, "section code");
@@ -284,7 +284,7 @@ static void begin_custom_section(Context* ctx,
                                  size_t leb_size_guess) {
   assert(ctx->last_section_leb_size_guess == 0);
   char desc[100];
-  snprintf(desc, sizeof(desc), "section \"%s\"", name);
+  wabt_snprintf(desc, sizeof(desc), "section \"%s\"", name);
   write_header(ctx, desc, PRINT_HEADER_NO_INDEX);
   write_u8_enum(&ctx->stream, BinarySection::Custom, "custom section code");
   ctx->last_section_type = BinarySection::Custom;
@@ -309,7 +309,7 @@ static void begin_subsection(Context* ctx,
                              size_t leb_size_guess) {
   assert(ctx->last_subsection_leb_size_guess == 0);
   char desc[100];
-  snprintf(desc, sizeof(desc), "subsection \"%s\"", name);
+  wabt_snprintf(desc, sizeof(desc), "subsection \"%s\"", name);
   ctx->last_subsection_leb_size_guess = leb_size_guess;
   ctx->last_subsection_offset =
       write_u32_leb128_space(ctx, leb_size_guess, "subsection size (guess)");
@@ -389,9 +389,8 @@ static void write_expr(Context* ctx,
       write_opcode(&ctx->stream, Opcode::BrTable);
       write_u32_leb128(&ctx->stream, expr->br_table.targets.size,
                        "num targets");
-      size_t i;
       uint32_t depth;
-      for (i = 0; i < expr->br_table.targets.size; ++i) {
+      for (size_t i = 0; i < expr->br_table.targets.size; ++i) {
         depth = get_label_var_depth(ctx, &expr->br_table.targets.data[i]);
         write_u32_leb128(&ctx->stream, depth, "break depth");
       }
@@ -539,8 +538,7 @@ static void write_expr_list(Context* ctx,
                             const Module* module,
                             const Func* func,
                             const Expr* first) {
-  const Expr* expr;
-  for (expr = first; expr; expr = expr->next)
+  for (const Expr* expr = first; expr; expr = expr->next)
     write_expr(ctx, module, func, expr);
 }
 
@@ -570,8 +568,7 @@ static void write_func_locals(Context* ctx,
   /* loop through once to count the number of local declaration runs */
   Type current_type = GET_LOCAL_TYPE(FIRST_LOCAL_INDEX);
   uint32_t local_decl_count = 1;
-  uint32_t i;
-  for (i = FIRST_LOCAL_INDEX + 1; i < LAST_LOCAL_INDEX; ++i) {
+  for (uint32_t i = FIRST_LOCAL_INDEX + 1; i < LAST_LOCAL_INDEX; ++i) {
     Type type = GET_LOCAL_TYPE(i);
     if (current_type != type) {
       local_decl_count++;
@@ -583,7 +580,7 @@ static void write_func_locals(Context* ctx,
   write_u32_leb128(&ctx->stream, local_decl_count, "local decl count");
   current_type = GET_LOCAL_TYPE(FIRST_LOCAL_INDEX);
   uint32_t local_type_count = 1;
-  for (i = FIRST_LOCAL_INDEX + 1; i <= LAST_LOCAL_INDEX; ++i) {
+  for (uint32_t i = FIRST_LOCAL_INDEX + 1; i <= LAST_LOCAL_INDEX; ++i) {
     /* loop through an extra time to catch the final type transition */
     Type type = i == LAST_LOCAL_INDEX ? Type::Void : GET_LOCAL_TYPE(i);
     if (current_type == type) {
@@ -627,7 +624,7 @@ static void write_global_header(Context* ctx, const Global* global) {
 
 static void write_reloc_section(Context* ctx, RelocSection* reloc_section) {
   char section_name[128];
-  snprintf(section_name, sizeof(section_name), "%s.%s",
+  wabt_snprintf(section_name, sizeof(section_name), "%s.%s",
            WABT_BINARY_SECTION_RELOC, reloc_section->name);
   begin_custom_section(ctx, section_name, LEB_SECTION_SIZE_GUESS);
   write_u32_leb128_enum(&ctx->stream, reloc_section->section_code,
@@ -635,8 +632,7 @@ static void write_reloc_section(Context* ctx, RelocSection* reloc_section) {
   RelocVector* relocs = &reloc_section->relocations;
   write_u32_leb128(&ctx->stream, relocs->size, "num relocs");
 
-  size_t i;
-  for (i = 0; i < relocs->size; i++) {
+  for (size_t i = 0; i < relocs->size; i++) {
     write_u32_leb128_enum(&ctx->stream, relocs->data[i].type, "reloc type");
     write_u32_leb128(&ctx->stream, relocs->data[i].offset, "reloc offset");
   }
@@ -645,28 +641,26 @@ static void write_reloc_section(Context* ctx, RelocSection* reloc_section) {
 }
 
 static Result write_module(Context* ctx, const Module* module) {
-  size_t i;
   write_u32(&ctx->stream, WABT_BINARY_MAGIC, "WASM_BINARY_MAGIC");
   write_u32(&ctx->stream, WABT_BINARY_VERSION, "WASM_BINARY_VERSION");
 
   if (module->func_types.size) {
     begin_known_section(ctx, BinarySection::Type, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->func_types.size, "num types");
-    for (i = 0; i < module->func_types.size; ++i) {
+    for (size_t i = 0; i < module->func_types.size; ++i) {
       const FuncType* func_type = module->func_types.data[i];
       const FuncSignature* sig = &func_type->sig;
       write_header(ctx, "type", i);
       write_type(&ctx->stream, Type::Func);
 
-      size_t j;
       uint32_t num_params = sig->param_types.size;
       uint32_t num_results = sig->result_types.size;
       write_u32_leb128(&ctx->stream, num_params, "num params");
-      for (j = 0; j < num_params; ++j)
+      for (size_t j = 0; j < num_params; ++j)
         write_type(&ctx->stream, sig->param_types.data[j]);
 
       write_u32_leb128(&ctx->stream, num_results, "num results");
-      for (j = 0; j < num_results; ++j)
+      for (size_t j = 0; j < num_results; ++j)
         write_type(&ctx->stream, sig->result_types.data[j]);
     }
     end_section(ctx);
@@ -676,7 +670,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Import, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->imports.size, "num imports");
 
-    for (i = 0; i < module->imports.size; ++i) {
+    for (size_t i = 0; i < module->imports.size; ++i) {
       const Import* import = module->imports.data[i];
       write_header(ctx, "import header", i);
       write_str(&ctx->stream, import->module_name.start,
@@ -712,10 +706,11 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Function, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, num_funcs, "num functions");
 
-    for (i = 0; i < num_funcs; ++i) {
+    for (size_t i = 0; i < num_funcs; ++i) {
       const Func* func = module->funcs.data[i + module->num_func_imports];
       char desc[100];
-      snprintf(desc, sizeof(desc), "function %" PRIzd " signature index", i);
+      wabt_snprintf(desc, sizeof(desc), "function %" PRIzd " signature index",
+                    i);
       write_u32_leb128(&ctx->stream,
                        get_func_type_index_by_decl(module, &func->decl), desc);
     }
@@ -727,7 +722,7 @@ static Result write_module(Context* ctx, const Module* module) {
   if (num_tables) {
     begin_known_section(ctx, BinarySection::Table, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, num_tables, "num tables");
-    for (i = 0; i < num_tables; ++i) {
+    for (size_t i = 0; i < num_tables; ++i) {
       const Table* table = module->tables.data[i + module->num_table_imports];
       write_header(ctx, "table", i);
       write_table(ctx, table);
@@ -740,7 +735,7 @@ static Result write_module(Context* ctx, const Module* module) {
   if (num_memories) {
     begin_known_section(ctx, BinarySection::Memory, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, num_memories, "num memories");
-    for (i = 0; i < num_memories; ++i) {
+    for (size_t i = 0; i < num_memories; ++i) {
       const Memory* memory =
           module->memories.data[i + module->num_memory_imports];
       write_header(ctx, "memory", i);
@@ -755,7 +750,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Global, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, num_globals, "num globals");
 
-    for (i = 0; i < num_globals; ++i) {
+    for (size_t i = 0; i < num_globals; ++i) {
       const Global* global =
           module->globals.data[i + module->num_global_imports];
       write_global_header(ctx, global);
@@ -768,7 +763,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Export, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->exports.size, "num exports");
 
-    for (i = 0; i < module->exports.size; ++i) {
+    for (size_t i = 0; i < module->exports.size; ++i) {
       const Export* export_ = module->exports.data[i];
       write_str(&ctx->stream, export_->name.start, export_->name.length,
                 PrintChars::Yes, "export name");
@@ -812,7 +807,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Elem, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->elem_segments.size,
                      "num elem segments");
-    for (i = 0; i < module->elem_segments.size; ++i) {
+    for (size_t i = 0; i < module->elem_segments.size; ++i) {
       ElemSegment* segment = module->elem_segments.data[i];
       int table_index = get_table_index_by_var(module, &segment->table_var);
       write_header(ctx, "elem segment header", i);
@@ -820,8 +815,7 @@ static Result write_module(Context* ctx, const Module* module) {
       write_init_expr(ctx, module, segment->offset);
       write_u32_leb128(&ctx->stream, segment->vars.size,
                        "num function indices");
-      size_t j;
-      for (j = 0; j < segment->vars.size; ++j) {
+      for (size_t j = 0; j < segment->vars.size; ++j) {
         int index = get_func_index_by_var(module, &segment->vars.data[j]);
         write_u32_leb128_with_reloc(ctx, index, "function index",
                                     RelocType::FuncIndexLeb);
@@ -834,7 +828,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Code, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, num_funcs, "num functions");
 
-    for (i = 0; i < num_funcs; ++i) {
+    for (size_t i = 0; i < num_funcs; ++i) {
       write_header(ctx, "function body", i);
       const Func* func = module->funcs.data[i + module->num_func_imports];
 
@@ -853,7 +847,7 @@ static Result write_module(Context* ctx, const Module* module) {
     begin_known_section(ctx, BinarySection::Data, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->data_segments.size,
                      "num data segments");
-    for (i = 0; i < module->data_segments.size; ++i) {
+    for (size_t i = 0; i < module->data_segments.size; ++i) {
       const DataSegment* segment = module->data_segments.data[i];
       write_header(ctx, "data segment header", i);
       int memory_index = get_memory_index_by_var(module, &segment->memory_var);
@@ -874,25 +868,12 @@ static Result write_module(Context* ctx, const Module* module) {
     char desc[100];
     begin_custom_section(ctx, WABT_BINARY_SECTION_NAME, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, 1, "function name type");
-
     begin_subsection(ctx, "function name subsection", LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->funcs.size, "num functions");
-    for (i = 0; i < module->funcs.size; ++i) {
+    for (size_t i = 0; i < module->funcs.size; ++i) {
       const Func* func = module->funcs.data[i];
       write_u32_leb128(&ctx->stream, i, "function index");
-      snprintf(desc, sizeof(desc), "func name %" PRIzd, i);
-      write_str(&ctx->stream, func->name.start, func->name.length,
-                PrintChars::Yes, desc);
-    }
-    end_subsection(ctx);
-    write_u32_leb128(&ctx->stream, 1, "function name type");
-
-    begin_subsection(ctx, "function name subsection", LEB_SECTION_SIZE_GUESS);
-    write_u32_leb128(&ctx->stream, module->funcs.size, "num functions");
-    for (i = 0; i < module->funcs.size; ++i) {
-      const Func* func = module->funcs.data[i];
-      write_u32_leb128(&ctx->stream, i, "function index");
-      snprintf(desc, sizeof(desc), "func name %" PRIzd, i);
+      wabt_snprintf(desc, sizeof(desc), "func name %" PRIzd, i);
       write_str(&ctx->stream, func->name.start, func->name.length,
                 PrintChars::Yes, desc);
     }
@@ -902,24 +883,24 @@ static Result write_module(Context* ctx, const Module* module) {
 
     begin_subsection(ctx, "local name subsection", LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, module->funcs.size, "num functions");
-    for (i = 0; i < module->funcs.size; ++i) {
+    for (size_t i = 0; i < module->funcs.size; ++i) {
       const Func* func = module->funcs.data[i];
-      uint32_t num_params = get_num_params(func);
-      uint32_t num_locals = func->local_types.size;
-      uint32_t num_params_and_locals = get_num_params_and_locals(func);
-
-      if (!num_params_and_locals)
-        continue;
+      write_u32_leb128(&ctx->stream, i, "function index");
+      snprintf(desc, sizeof(desc), "func name %" PRIzd, i);
+      write_str(&ctx->stream, func->name.start, func->name.length,
+                PrintChars::Yes, desc);
+    }
+    end_subsection(ctx);
+    write_u32_leb128(&ctx->stream, 1, "function name type");
 
       write_u32_leb128(&ctx->stream, i, "function index");
       write_u32_leb128(&ctx->stream, num_params_and_locals, "num locals");
 
       make_type_binding_reverse_mapping(
         &func->decl.sig.param_types, &func->param_bindings, &index_to_name);
-      size_t j;
-      for (j = 0; j < num_params; ++j) {
+      for (size_t j = 0; j < num_params; ++j) {
         StringSlice name = index_to_name.data[j];
-        snprintf(desc, sizeof(desc), "local name %" PRIzd, j);
+        wabt_snprintf(desc, sizeof(desc), "local name %" PRIzd, j);
         write_u32_leb128(&ctx->stream, j, "local index");
         write_str(&ctx->stream, name.start, name.length, PrintChars::Yes,
                   desc);
@@ -927,9 +908,9 @@ static Result write_module(Context* ctx, const Module* module) {
 
       make_type_binding_reverse_mapping(
         &func->local_types, &func->local_bindings, &index_to_name);
-      for (j = 0; j < num_locals; ++j) {
+      for (size_t j = 0; j < num_locals; ++j) {
         StringSlice name = index_to_name.data[j];
-        snprintf(desc, sizeof(desc), "local name %" PRIzd, num_params + j);
+        wabt_snprintf(desc, sizeof(desc), "local name %" PRIzd, num_params + j);
         write_u32_leb128(&ctx->stream, num_params + j, "local index");
         write_str(&ctx->stream, name.start, name.length, PrintChars::Yes,
                   desc);
@@ -942,7 +923,7 @@ static Result write_module(Context* ctx, const Module* module) {
   }
 
   if (ctx->options->relocatable) {
-    for (i = 0; i < ctx->reloc_sections.size; i++) {
+    for (size_t i = 0; i < ctx->reloc_sections.size; i++) {
       write_reloc_section(ctx, &ctx->reloc_sections.data[i]);
     }
     WABT_DESTROY_VECTOR_AND_ELEMENTS(ctx->reloc_sections, reloc_section);

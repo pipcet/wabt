@@ -43,10 +43,10 @@ void ast_format_error(SourceErrorHandler* error_handler,
   va_copy(args_copy, args);
   char fixed_buf[WABT_DEFAULT_SNPRINTF_ALLOCA_BUFSIZE];
   char* buffer = fixed_buf;
-  size_t len = vsnprintf(fixed_buf, sizeof(fixed_buf), format, args);
+  size_t len = wabt_vsnprintf(fixed_buf, sizeof(fixed_buf), format, args);
   if (len + 1 > sizeof(fixed_buf)) {
     buffer = static_cast<char*>(alloca(len + 1));
-    len = vsnprintf(buffer, len + 1, format, args_copy);
+    len = wabt_vsnprintf(buffer, len + 1, format, args_copy);
   }
 
   char* source_line = nullptr;
@@ -81,7 +81,7 @@ void destroy_optional_export(OptionalExport* export_) {
 void destroy_exported_func(ExportedFunc* exported_func) {
   destroy_optional_export(&exported_func->export_);
   destroy_func(exported_func->func);
-  wabt_free(exported_func->func);
+  delete exported_func->func;
 }
 
 void destroy_text_list(TextList* text_list) {
@@ -89,7 +89,7 @@ void destroy_text_list(TextList* text_list) {
   while (node) {
     TextListNode* next = node->next;
     destroy_string_slice(&node->text);
-    wabt_free(node);
+    delete node;
     node = next;
   }
 }
@@ -116,7 +116,7 @@ void destroy_func_fields(FuncField* func_field) {
         break;
     }
 
-    wabt_free(func_field);
+    delete func_field;
     func_field = next_func_field;
   }
 }

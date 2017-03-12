@@ -105,7 +105,7 @@ static void dup_name(Context* ctx, StringSlice* name, StringSlice* out_name) {
 static Result append_expr(Context* ctx, Expr* expr) {
   LabelNode* label;
   if (WABT_FAILED(top_label(ctx, &label))) {
-    wabt_free(expr);
+    delete expr;
     return Result::Error;
   }
   if (*label->first) {
@@ -191,6 +191,8 @@ static Result on_import(uint32_t index,
 }
 
 static Result on_import_func(uint32_t import_index,
+                             StringSlice module_name,
+                             StringSlice field_name,
                              uint32_t func_index,
                              uint32_t sig_index,
                              void* user_data) {
@@ -213,6 +215,8 @@ static Result on_import_func(uint32_t import_index,
 }
 
 static Result on_import_table(uint32_t import_index,
+                              StringSlice module_name,
+                              StringSlice field_name,
                               uint32_t table_index,
                               Type elem_type,
                               const Limits* elem_limits,
@@ -230,6 +234,8 @@ static Result on_import_table(uint32_t import_index,
 }
 
 static Result on_import_memory(uint32_t import_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                uint32_t memory_index,
                                const Limits* page_limits,
                                void* user_data) {
@@ -246,6 +252,8 @@ static Result on_import_memory(uint32_t import_index,
 }
 
 static Result on_import_global(uint32_t import_index,
+                               StringSlice module_name,
+                               StringSlice field_name,
                                uint32_t global_index,
                                Type type,
                                bool mutable_,
@@ -464,8 +472,7 @@ static Result on_local_decl(uint32_t decl_index,
   size_t new_local_count = old_local_count + count;
   reserve_types(&ctx->current_func->local_types, new_local_count);
   TypeVector* types = &ctx->current_func->local_types;
-  size_t i;
-  for (i = 0; i < count; ++i)
+  for (size_t i = 0; i < count; ++i)
     types->data[old_local_count + i] = type;
   types->size = new_local_count;
   return Result::Ok;
@@ -517,8 +524,7 @@ static Result on_br_table_expr(BinaryReaderContext* context,
   Expr* expr = new_br_table_expr();
   reserve_vars(&expr->br_table.targets, num_targets);
   expr->br_table.targets.size = num_targets;
-  uint32_t i;
-  for (i = 0; i < num_targets; ++i) {
+  for (uint32_t i = 0; i < num_targets; ++i) {
     Var* var = &expr->br_table.targets.data[i];
     var->type = VarType::Index;
     var->index = target_depths[i];
@@ -873,7 +879,7 @@ static Result on_data_segment_data(uint32_t index,
   Context* ctx = static_cast<Context*>(user_data);
   assert(index == ctx->module->data_segments.size - 1);
   DataSegment* segment = ctx->module->data_segments.data[index];
-  segment->data = wabt_alloc(size);
+  segment->data = new char[size];
   segment->size = size;
   memcpy(segment->data, data, size);
   return Result::Ok;

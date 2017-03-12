@@ -110,8 +110,7 @@ FuncTypePtr get_func_type_by_var(const Module* module, const Var* var) {
 }
 
 int get_func_type_index_by_sig(const Module* module, const FuncSignature* sig) {
-  size_t i;
-  for (i = 0; i < module->func_types.size; ++i)
+  for (size_t i = 0; i < module->func_types.size; ++i)
     if (signatures_are_equal(&module->func_types.data[i]->sig, sig))
       return i;
   return -1;
@@ -127,8 +126,7 @@ int get_func_type_index_by_decl(const Module* module,
 }
 
 Module* get_first_module(const Script* script) {
-  size_t i;
-  for (i = 0; i < script->commands.size; ++i) {
+  for (size_t i = 0; i < script->commands.size; ++i) {
     Command* command = &script->commands.data[i];
     if (command->type == CommandType::Module)
       return &command->module;
@@ -154,8 +152,7 @@ void make_type_binding_reverse_mapping(const TypeVector* types,
   memset(out_reverse_mapping->data, 0, num_names * sizeof(StringSlice));
 
   /* map index to name */
-  size_t i;
-  for (i = 0; i < bindings->entries.capacity; ++i) {
+  for (size_t i = 0; i < bindings->entries.capacity; ++i) {
     const BindingHashEntry* entry = &bindings->entries.data[i];
     if (hash_entry_is_free(entry))
       continue;
@@ -169,8 +166,7 @@ void make_type_binding_reverse_mapping(const TypeVector* types,
 void find_duplicate_bindings(const BindingHash* bindings,
                              DuplicateBindingCallback callback,
                              void* user_data) {
-  size_t i;
-  for (i = 0; i < bindings->entries.capacity; ++i) {
+  for (size_t i = 0; i < bindings->entries.capacity; ++i) {
     BindingHashEntry* entry = &bindings->entries.data[i];
     if (hash_entry_is_free(entry))
       continue;
@@ -179,10 +175,8 @@ void find_duplicate_bindings(const BindingHash* bindings,
     if (entry->prev)
       continue;
 
-    BindingHashEntry* a = entry;
-    for (; a; a = a->next) {
-      BindingHashEntry* b = a->next;
-      for (; b; b = b->next) {
+    for (BindingHashEntry* a = entry; a; a = a->next) {
+      for (BindingHashEntry* b = a->next; b; b = b->next) {
         if (string_slices_are_equal(&a->binding.name, &b->binding.name))
           callback(a, b, user_data);
       }
@@ -191,8 +185,7 @@ void find_duplicate_bindings(const BindingHash* bindings,
 }
 
 ModuleField* append_module_field(Module* module) {
-  ModuleField* result =
-      static_cast<ModuleField*>(wabt_alloc_zero(sizeof(ModuleField)));
+  ModuleField* result = new ModuleField();
   if (!module->first_field)
     module->first_field = result;
   else if (module->last_field)
@@ -243,11 +236,11 @@ FuncType* append_implicit_func_type(Location* loc,
   V(ExprType::Select, select)                \
   V(ExprType::Unreachable, unreachable)
 
-#define DEFINE_NEW_EXPR(type_, name)                                  \
-  Expr* new_##name##_expr(void) {                                     \
-    Expr* result = static_cast<Expr*>(wabt_alloc_zero(sizeof(Expr))); \
-    result->type = type_;                                             \
-    return result;                                                    \
+#define DEFINE_NEW_EXPR(type_, name) \
+  Expr* new_##name##_expr(void) {    \
+    Expr* result = new Expr();       \
+    result->type = type_;            \
+    return result;                   \
   }
 FOREACH_EXPR_TYPE(DEFINE_NEW_EXPR)
 #undef DEFINE_NEW_EXPR
@@ -341,7 +334,7 @@ void destroy_expr(Expr* expr) {
     case ExprType::Unreachable:
       break;
   }
-  wabt_free(expr);
+  delete expr;
 }
 
 void destroy_func_declaration(FuncDeclaration* decl) {
@@ -396,7 +389,7 @@ void destroy_func_type(FuncType* func_type) {
 void destroy_data_segment(DataSegment* data) {
   destroy_var(&data->memory_var);
   destroy_expr_list(data->offset);
-  wabt_free(data->data);
+  delete [] data->data;
 }
 
 void destroy_memory(Memory* memory) {
@@ -449,7 +442,7 @@ void destroy_module(Module* module) {
   while (field) {
     ModuleField* next_field = field->next;
     destroy_module_field(field);
-    wabt_free(field);
+    delete field;
     field = next_field;
   }
 
@@ -475,10 +468,10 @@ void destroy_module(Module* module) {
 void destroy_raw_module(RawModule* raw) {
   if (raw->type == RawModuleType::Text) {
     destroy_module(raw->text);
-    wabt_free(raw->text);
+    delete raw->text;
   } else {
     destroy_string_slice(&raw->binary.name);
-    wabt_free(raw->binary.data);
+    delete [] raw->binary.data;
   }
 }
 
@@ -568,8 +561,7 @@ void destroy_script(Script* script) {
 static Result visit_expr(Expr* expr, ExprVisitor* visitor);
 
 Result visit_expr_list(Expr* first, ExprVisitor* visitor) {
-  Expr* expr;
-  for (expr = first; expr; expr = expr->next)
+  for (Expr* expr = first; expr; expr = expr->next)
     CHECK_RESULT(visit_expr(expr, visitor));
   return Result::Ok;
 }
