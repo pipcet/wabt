@@ -1,0 +1,14 @@
+;;; TOOL: run-wasm-link
+;;; FLAGS: --debug-names -r
+(module
+  (import "__extern" "bar" (func $import_func2))
+  (import "__extern" "baz" (func $import_func1))
+)
+(module
+  (export "baz" (func 0))
+  (func $name3 (param $param3 i32)
+     i32.const 2
+     call 0)
+)
+(;; STDOUT ;;;
+;;; STDOUT ;;)
