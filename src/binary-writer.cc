@@ -879,12 +879,19 @@ static Result write_module(Context* ctx, const Module* module) {
     std::vector<std::string> index_to_name;
 
     char desc[100];
+    uint32_t num_funcs_with_names = 0;
     begin_custom_section(ctx, WABT_BINARY_SECTION_NAME, LEB_SECTION_SIZE_GUESS);
     write_u32_leb128(&ctx->stream, 1, "function name type");
     begin_subsection(ctx, "function name subsection", LEB_SECTION_SIZE_GUESS);
-    write_u32_leb128(&ctx->stream, module->funcs.size(), "num functions");
+    for (auto func: module->funcs) {
+      if (func->name.length)
+        num_funcs_with_names++;
+    }
+    write_u32_leb128(&ctx->stream, num_funcs_with_names, "num functions");
     for (size_t i = 0; i < module->funcs.size(); ++i) {
       const Func* func = module->funcs[i];
+      if (func->name.length == 0)
+        continue;
       write_u32_leb128(&ctx->stream, i, "function index");
       wabt_snprintf(desc, sizeof(desc), "func name %" PRIzd, i);
       write_str(&ctx->stream, func->name.start, func->name.length,
