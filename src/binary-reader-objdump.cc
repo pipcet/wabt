@@ -444,8 +444,18 @@ void BinaryReaderObjdump::LogOpcode(const uint8_t* data,
           section_starts[static_cast<size_t>(BinarySection::Code)];
       size_t abs_offset = code_start + reloc->offset;
       if (last_opcode_end > abs_offset) {
-        printf("           %06" PRIzx ": %-18s %d", abs_offset,
-               get_reloc_type_name(reloc->type), reloc->index);
+        if (reloc->type == RelocType::FuncIndexLEB) {
+          if (reloc->index < options->function_names.size() &&
+              !options->function_names[reloc->index].empty())
+            printf("           %06" PRIzx ": %-18s func[%d] = <%s>", abs_offset,
+                   get_reloc_type_name(reloc->type), reloc->index,
+                   options->function_names[reloc->index].c_str());
+          else
+            printf("           %06" PRIzx ": %-18s %d", abs_offset,
+                   get_reloc_type_name(reloc->type), reloc->index);
+        } else
+          printf("           %06" PRIzx ": %-18s %d", abs_offset,
+                 get_reloc_type_name(reloc->type), reloc->index);
         switch (reloc->type) {
           case RelocType::MemoryAddressLEB:
           case RelocType::MemoryAddressSLEB:
@@ -615,8 +625,8 @@ Result BinaryReaderObjdump::BeginFunctionBody(uint32_t index) {
   if (options->mode == ObjdumpMode::Disassemble) {
     if (index < options->function_names.size() &&
         !options->function_names[index].empty())
-      printf("%06" PRIzx " <%s>:\n", state->offset,
-             options->function_names[index].c_str());
+      printf("%06" PRIzx " <%s> = func[%d]:\n", state->offset,
+             options->function_names[index].c_str(), index);
     else
       printf("%06" PRIzx " func[%d]:\n", state->offset, index);
   }
