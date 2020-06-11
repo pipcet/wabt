@@ -381,6 +381,19 @@ Result BinaryReaderObjdumpPrepass::OnReloc(RelocType type,
   return Result::Ok;
 }
 
+class IndentLevel;
+class IndentLevel {
+public:
+  IndentLevel *previous;
+  int num_indents;
+  int depth;
+
+  IndentLevel (IndentLevel *previous) :
+    previous (previous), num_indents (0), depth (previous ? previous->depth + 1 : 1)
+  {
+  }
+};
+
 class BinaryReaderObjdumpDisassemble : public BinaryReaderObjdumpBase {
  public:
   using BinaryReaderObjdumpBase::BinaryReaderObjdumpBase;
@@ -417,7 +430,8 @@ class BinaryReaderObjdumpDisassemble : public BinaryReaderObjdumpBase {
   Opcode current_opcode = Opcode::Unreachable;
   Offset current_opcode_offset = 0;
   Offset last_opcode_end = 0;
-  int indent_level = 0;
+  IndentLevel *indent_level = NULL;
+  bool in_indent;
   Index next_reloc = 0;
   Index local_index_ = 0;
 };
@@ -496,6 +510,7 @@ Result BinaryReaderObjdumpDisassemble::OnLocalDecl(Index decl_index,
 void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
                                                const char* fmt,
                                                ...) {
+  in_indent = false;
   const Offset opcode_size = current_opcode.GetLength();
   const Offset total_size = opcode_size + data_size;
   // current_opcode_offset has already read past this opcode; rewind it by the
@@ -523,18 +538,23 @@ void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
       first_line = false;
 
       // Print disassembly.
-      int indent_level = this->indent_level;
+      IndentLevel *indent_level = this->indent_level;
       switch (current_opcode) {
         case Opcode::Else:
         case Opcode::Catch:
-          indent_level--;
+	  if (indent_level && indent_level->num_indents-- == 0)
+	    {
+	      IndentLevel *old = indent_level;
+	      this->indent_level = indent_level = indent_level->previous;
+	      delete old;
+	    }
         default:
           break;
       }
-      if (false)
-      for (int j = 0; j < indent_level; j++) {
-        printf("  ");
-      }
+      if (indent_level)
+	for (int j = 0; j < indent_level->depth; j++) {
+	  printf("  ");
+	}
 
       const char* opcode_name = current_opcode.GetName();
       printf("%s", opcode_name);
@@ -666,10 +686,22 @@ Result BinaryReaderObjdumpDisassemble::OnEndFunc() {
 }
 
 Result BinaryReaderObjdumpDisassemble::OnEndExpr() {
-  if (indent_level > 0) {
-    indent_level--;
-  }
-  LogOpcode(0, nullptr);
+  IndentLevel *il = indent_level;
+  if (indent_level && indent_level->num_indents-- == 0)
+    {
+      IndentLevel *old = indent_level;
+      il = indent_level = indent_level->previous;
+      delete old;
+    }
+  else
+    {
+      indent_level = indent_level->previous;
+    }
+  if (il)
+    LogOpcode(0, "[%d]", il->num_indents + 1);
+  else
+    LogOpcode(0, nullptr);
+  indent_level = il;
   return Result::Ok;
 }
 
@@ -688,12 +720,18 @@ Result BinaryReaderObjdumpDisassemble::BeginFunctionBody(Index index,
 
 Result BinaryReaderObjdumpDisassemble::OnOpcodeBlockSig(Type sig_type) {
   Offset immediate_len = state->offset - current_opcode_offset;
+  bool new_indent = !in_indent;
   if (sig_type != Type::Void) {
     LogOpcode(immediate_len, "%s", BlockSigToString(sig_type).c_str());
   } else {
     LogOpcode(immediate_len, nullptr);
   }
-  indent_level++;
+  if (new_indent) {
+    indent_level = new IndentLevel(indent_level);
+  } else {
+    indent_level->num_indents++;
+  }
+  in_indent = true;
   return Result::Ok;
 }
 
