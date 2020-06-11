@@ -531,6 +531,7 @@ void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
         default:
           break;
       }
+      if (false)
       for (int j = 0; j < indent_level; j++) {
         printf("  ");
       }
