@@ -385,11 +385,12 @@ class IndentLevel;
 class IndentLevel {
 public:
   IndentLevel *previous;
-  int num_indents;
+  Offset offset;
   int depth;
 
-  IndentLevel (IndentLevel *previous) :
-    previous (previous), num_indents (0), depth (previous ? previous->depth + 1 : 1)
+  IndentLevel (IndentLevel *previous, Offset offset, bool new_level = true) :
+    previous (previous), offset (offset),
+    depth ((previous ? previous->depth : 0) + (new_level ? 1 : 0))
   {
   }
 };
@@ -538,14 +539,13 @@ void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
       first_line = false;
 
       // Print disassembly.
-      IndentLevel *indent_level = this->indent_level;
       switch (current_opcode) {
         case Opcode::Else:
         case Opcode::Catch:
-	  if (indent_level && indent_level->num_indents-- == 0)
+	  if (indent_level)
 	    {
 	      IndentLevel *old = indent_level;
-	      this->indent_level = indent_level = indent_level->previous;
+	      indent_level = indent_level->previous;
 	      delete old;
 	    }
         default:
@@ -553,7 +553,7 @@ void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
       }
       if (indent_level)
 	for (int j = 0; j < indent_level->depth; j++) {
-	  printf("  ");
+	  printf("| ");
 	}
 
       const char* opcode_name = current_opcode.GetName();
@@ -687,21 +687,20 @@ Result BinaryReaderObjdumpDisassemble::OnEndFunc() {
 
 Result BinaryReaderObjdumpDisassemble::OnEndExpr() {
   IndentLevel *il = indent_level;
-  if (indent_level && indent_level->num_indents-- == 0)
-    {
-      IndentLevel *old = indent_level;
-      il = indent_level = indent_level->previous;
-      delete old;
-    }
-  else
+  while (indent_level && indent_level->depth == il->depth)
     {
       indent_level = indent_level->previous;
     }
   if (il)
-    LogOpcode(0, "[%d]", il->num_indents + 1);
+    {
+      LogOpcode(0, "[%06" PRIzx "]", il->offset);
+    }
   else
     LogOpcode(0, nullptr);
-  indent_level = il;
+  if (il) {
+    indent_level = il->previous;
+    delete il;
+  }
   return Result::Ok;
 }
 
@@ -726,11 +725,7 @@ Result BinaryReaderObjdumpDisassemble::OnOpcodeBlockSig(Type sig_type) {
   } else {
     LogOpcode(immediate_len, nullptr);
   }
-  if (new_indent) {
-    indent_level = new IndentLevel(indent_level);
-  } else {
-    indent_level->num_indents++;
-  }
+  indent_level = new IndentLevel(indent_level, state->offset, new_indent);
   in_indent = true;
   return Result::Ok;
 }
