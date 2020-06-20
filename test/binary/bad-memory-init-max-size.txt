@@ -1,5 +1,4 @@
-;;; ERROR: 1
-;;; TOOL: run-gen-wasm
+;;; TOOL: run-gen-wasm-bad
 magic
 version
 section(MEMORY) {
@@ -9,7 +8,6 @@ section(MEMORY) {
   max[1]
 }
 (;; STDERR ;;;
-Error running "wasm2wast":
-error: @0x0000000e: memory initial size must be <= max size
-
+out/test/binary/bad-memory-init-max-size/bad-memory-init-max-size.wasm:000000e: error: max pages (1) must be >= initial pages (2)
+out/test/binary/bad-memory-init-max-size/bad-memory-init-max-size.wasm:000000e: error: max pages (1) must be >= initial pages (2)
 ;;; STDERR ;;)

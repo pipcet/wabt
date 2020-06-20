@@ -1,13 +1,11 @@
+;;; TOOL: wat2wasm
 ;;; ERROR: 1
 (foo bar)
 (;; STDERR ;;;
-out/test/parse/bad-toplevel.txt:2:2: unexpected token "foo"
+out/test/parse/bad-toplevel.txt:3:2: error: unexpected token "foo", expected a module field or a module.
 (foo bar)
  ^^^
-out/test/parse/bad-toplevel.txt:2:6: unexpected token "bar"
+out/test/parse/bad-toplevel.txt:3:6: error: unexpected token bar, expected EOF.
 (foo bar)
      ^^^
-out/test/parse/bad-toplevel.txt:2:9: syntax error, unexpected )
-(foo bar)
-        ^
 ;;; STDERR ;;)

@@ -14,832 +14,817 @@
  * limitations under the License.
  */
 
-#include "literal.h"
+#include "src/literal.h"
 
-#include <assert.h>
-#include <errno.h>
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define HEX_DIGIT_BITS 4
-
-/* The PLUS_ONE values are used because normal IEEE floats have an implicit
- * leading one, so they have an additional bit of precision. */
-
-#define F32_SIGN_SHIFT 31
-#define F32_SIG_BITS 23
-#define F32_SIG_MASK 0x7fffff
-#define F32_SIG_PLUS_ONE_BITS 24
-#define F32_SIG_PLUS_ONE_MASK 0xffffff
-#define F32_EXP_MASK 0xff
-#define F32_MIN_EXP -127
-#define F32_MAX_EXP 128
-#define F32_EXP_BIAS 127
-#define F32_QUIET_NAN_TAG 0x400000
-
-#define F64_SIGN_SHIFT 63
-#define F64_SIG_BITS 52
-#define F64_SIG_MASK 0xfffffffffffffULL
-#define F64_SIG_PLUS_ONE_BITS 53
-#define F64_SIG_PLUS_ONE_MASK 0x1fffffffffffffULL
-#define F64_EXP_MASK 0x7ff
-#define F64_MIN_EXP -1023
-#define F64_MAX_EXP 1024
-#define F64_EXP_BIAS 1023
-#define F64_QUIET_NAN_TAG 0x8000000000000ULL
+#include <cassert>
+#include <cerrno>
+#include <cinttypes>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <type_traits>
 
 namespace wabt {
 
-static const char s_hex_digits[] = "0123456789abcdef";
+namespace {
 
-Result parse_hexdigit(char c, uint32_t* out) {
-  if (static_cast<unsigned int>(c - '0') <= 9) {
-    *out = c - '0';
-    return Result::Ok;
-  } else if (static_cast<unsigned int>(c - 'a') <= 6) {
-    *out = 10 + (c - 'a');
-    return Result::Ok;
-  } else if (static_cast<unsigned int>(c - 'A') <= 6) {
-    *out = 10 + (c - 'A');
-    return Result::Ok;
+template <typename T>
+struct FloatTraitsBase {};
+
+// The "PlusOne" values are used because normal IEEE floats have an implicit
+// leading one, so they have an additional bit of precision.
+
+template <>
+struct FloatTraitsBase<float> {
+  typedef uint32_t Uint;
+  static constexpr int kBits = sizeof(Uint) * 8;
+  static constexpr int kSigBits = 23;
+  static constexpr float kHugeVal = HUGE_VALF;
+  static constexpr int kMaxHexBufferSize = WABT_MAX_FLOAT_HEX;
+
+  static float Strto(const char* s, char** endptr) { return strtof(s, endptr); }
+};
+
+template <>
+struct FloatTraitsBase<double> {
+  typedef uint64_t Uint;
+  static constexpr int kBits = sizeof(Uint) * 8;
+  static constexpr int kSigBits = 52;
+  static constexpr float kHugeVal = HUGE_VAL;
+  static constexpr int kMaxHexBufferSize = WABT_MAX_DOUBLE_HEX;
+
+  static double Strto(const char* s, char** endptr) {
+    return strtod(s, endptr);
   }
-  return Result::Error;
-}
+};
 
-/* return 1 if the non-NULL-terminated string starting with |start| and ending
- with |end| starts with the NULL-terminated string |prefix|. */
-static bool string_starts_with(const char* start,
+template <typename T>
+struct FloatTraits : FloatTraitsBase<T> {
+  typedef typename FloatTraitsBase<T>::Uint Uint;
+  using FloatTraitsBase<T>::kBits;
+  using FloatTraitsBase<T>::kSigBits;
+
+  static constexpr int kExpBits = kBits - kSigBits - 1;
+  static constexpr int kSignShift = kBits - 1;
+  static constexpr Uint kSigMask = (Uint(1) << kSigBits) - 1;
+  static constexpr int kSigPlusOneBits = kSigBits + 1;
+  static constexpr Uint kSigPlusOneMask = (Uint(1) << kSigPlusOneBits) - 1;
+  static constexpr int kExpMask = (1 << kExpBits) - 1;
+  static constexpr int kMaxExp = 1 << (kExpBits - 1);
+  static constexpr int kMinExp = -kMaxExp + 1;
+  static constexpr int kExpBias = -kMinExp;
+  static constexpr Uint kQuietNanTag = Uint(1) << (kSigBits - 1);
+};
+
+template <typename T>
+class FloatParser {
+ public:
+  typedef FloatTraits<T> Traits;
+  typedef typename Traits::Uint Uint;
+  typedef T Float;
+
+  static Result Parse(LiteralType,
+                      const char* s,
+                      const char* end,
+                      Uint* out_bits);
+
+ private:
+  static bool StringStartsWith(const char* start,
                                const char* end,
-                               const char* prefix) {
+                               const char* prefix);
+  static Uint Make(bool sign, int exp, Uint sig);
+  static Uint ShiftAndRoundToNearest(Uint significand,
+                                     int shift,
+                                     bool seen_trailing_non_zero);
+
+  static Result ParseFloat(const char* s, const char* end, Uint* out_bits);
+  static Result ParseNan(const char* s, const char* end, Uint* out_bits);
+  static Result ParseHex(const char* s, const char* end, Uint* out_bits);
+  static void ParseInfinity(const char* s, const char* end, Uint* out_bits);
+};
+
+template <typename T>
+class FloatWriter {
+ public:
+  typedef FloatTraits<T> Traits;
+  typedef typename Traits::Uint Uint;
+
+  static void WriteHex(char* out, size_t size, Uint bits);
+};
+
+// Return 1 if the non-NULL-terminated string starting with |start| and ending
+// with |end| starts with the NULL-terminated string |prefix|.
+template <typename T>
+// static
+bool FloatParser<T>::StringStartsWith(const char* start,
+                                      const char* end,
+                                      const char* prefix) {
   while (start < end && *prefix) {
-    if (*start != *prefix)
+    if (*start != *prefix) {
       return false;
+    }
     start++;
     prefix++;
   }
   return *prefix == 0;
 }
 
-Result parse_uint64(const char* s, const char* end, uint64_t* out) {
-  if (s == end)
+// static
+template <typename T>
+Result FloatParser<T>::ParseFloat(const char* s,
+                                  const char* end,
+                                  Uint* out_bits) {
+  // Here is the normal behavior for strtof/strtod:
+  //
+  // input     | errno  |   output   |
+  // ---------------------------------
+  // overflow  | ERANGE | +-HUGE_VAL |
+  // underflow | ERANGE |        0.0 |
+  // otherwise |      0 |      value |
+  //
+  // So normally we need to clear errno before calling strto{f,d}, and check
+  // afterward whether it was set to ERANGE.
+  //
+  // glibc seems to have a bug where
+  // strtof("340282356779733661637539395458142568448") will return HUGE_VAL,
+  // but will not set errno to ERANGE. Since this function is only called when
+  // we know that we have parsed a "normal" number (i.e. not "inf"), we know
+  // that if we ever get HUGE_VAL, it must be overflow.
+  //
+  // The WebAssembly spec also ignores underflow, so we don't need to check for
+  // ERANGE at all.
+
+  // WebAssembly floats can contain underscores, but strto* can't parse those,
+  // so remove them first.
+  assert(s <= end);
+  const size_t kBufferSize = end - s + 1;  // +1 for \0.
+  char* buffer = static_cast<char*>(alloca(kBufferSize));
+  auto buffer_end =
+      std::copy_if(s, end, buffer, [](char c) -> bool { return c != '_'; });
+  assert(buffer_end < buffer + kBufferSize);
+  *buffer_end = 0;
+
+  char* endptr;
+  Float value = Traits::Strto(buffer, &endptr);
+  if (endptr != buffer_end ||
+      (value == Traits::kHugeVal || value == -Traits::kHugeVal)) {
     return Result::Error;
+  }
+
+  memcpy(out_bits, &value, sizeof(value));
+  return Result::Ok;
+}
+
+// static
+template <typename T>
+typename FloatParser<T>::Uint FloatParser<T>::Make(bool sign,
+                                                   int exp,
+                                                   Uint sig) {
+  assert(exp >= Traits::kMinExp && exp <= Traits::kMaxExp);
+  assert(sig <= Traits::kSigMask);
+  return (Uint(sign) << Traits::kSignShift) |
+         (Uint(exp + Traits::kExpBias) << Traits::kSigBits) | sig;
+}
+
+// static
+template <typename T>
+typename FloatParser<T>::Uint FloatParser<T>::ShiftAndRoundToNearest(
+    Uint significand,
+    int shift,
+    bool seen_trailing_non_zero) {
+  assert(shift > 0);
+  // Round ties to even.
+  if ((significand & (Uint(1) << shift)) || seen_trailing_non_zero) {
+    significand += Uint(1) << (shift - 1);
+  }
+  significand >>= shift;
+  return significand;
+}
+
+// static
+template <typename T>
+Result FloatParser<T>::ParseNan(const char* s,
+                                const char* end,
+                                Uint* out_bits) {
+  bool is_neg = false;
+  if (*s == '-') {
+    is_neg = true;
+    s++;
+  } else if (*s == '+') {
+    s++;
+  }
+  assert(StringStartsWith(s, end, "nan"));
+  s += 3;
+
+  Uint tag;
+  if (s != end) {
+    tag = 0;
+    assert(StringStartsWith(s, end, ":0x"));
+    s += 3;
+
+    for (; s < end; ++s) {
+      if (*s == '_') {
+        continue;
+      }
+      uint32_t digit;
+      CHECK_RESULT(ParseHexdigit(*s, &digit));
+      tag = tag * 16 + digit;
+      // Check for overflow.
+      if (tag > Traits::kSigMask) {
+        return Result::Error;
+      }
+    }
+
+    // NaN cannot have a zero tag, that is reserved for infinity.
+    if (tag == 0) {
+      return Result::Error;
+    }
+  } else {
+    tag = Traits::kQuietNanTag;
+  }
+
+  *out_bits = Make(is_neg, Traits::kMaxExp, tag);
+  return Result::Ok;
+}
+
+// static
+template <typename T>
+Result FloatParser<T>::ParseHex(const char* s,
+                                const char* end,
+                                Uint* out_bits) {
+  bool is_neg = false;
+  if (*s == '-') {
+    is_neg = true;
+    s++;
+  } else if (*s == '+') {
+    s++;
+  }
+  assert(StringStartsWith(s, end, "0x"));
+  s += 2;
+
+  // Loop over the significand; everything up to the 'p'.
+  // This code is a bit nasty because we want to support extra zeroes anywhere
+  // without having to use many significand bits.
+  // e.g.
+  // 0x00000001.0p0 => significand = 1, significand_exponent = 0
+  // 0x10000000.0p0 => significand = 1, significand_exponent = 28
+  // 0x0.000001p0 => significand = 1, significand_exponent = -24
+  bool seen_dot = false;
+  bool seen_trailing_non_zero = false;
+  Uint significand = 0;
+  int significand_exponent = 0;  // Exponent adjustment due to dot placement.
+  for (; s < end; ++s) {
+    uint32_t digit;
+    if (*s == '_') {
+      continue;
+    } else if (*s == '.') {
+      seen_dot = true;
+    } else if (Succeeded(ParseHexdigit(*s, &digit))) {
+      if (Traits::kBits - Clz(significand) <= Traits::kSigPlusOneBits) {
+        significand = (significand << 4) + digit;
+        if (seen_dot) {
+          significand_exponent -= 4;
+        }
+      } else {
+        if (!seen_trailing_non_zero && digit != 0) {
+          seen_trailing_non_zero = true;
+        }
+        if (!seen_dot) {
+          significand_exponent += 4;
+        }
+      }
+    } else {
+      break;
+    }
+  }
+
+  if (significand == 0) {
+    // 0 or -0.
+    *out_bits = Make(is_neg, Traits::kMinExp, 0);
+    return Result::Ok;
+  }
+
+  int exponent = 0;
+  bool exponent_is_neg = false;
+  if (s < end) {
+    assert(*s == 'p' || *s == 'P');
+    s++;
+    // Exponent is always positive, but significand_exponent is signed.
+    // significand_exponent_add is negated if exponent will be negative, so it
+    // can be easily summed to see if the exponent is too large (see below).
+    int significand_exponent_add = 0;
+    if (*s == '-') {
+      exponent_is_neg = true;
+      significand_exponent_add = -significand_exponent;
+      s++;
+    } else if (*s == '+') {
+      s++;
+      significand_exponent_add = significand_exponent;
+    }
+
+    for (; s < end; ++s) {
+      if (*s == '_') {
+        continue;
+      }
+
+      uint32_t digit = (*s - '0');
+      assert(digit <= 9);
+      exponent = exponent * 10 + digit;
+      if (exponent + significand_exponent_add >= Traits::kMaxExp) {
+        break;
+      }
+    }
+  }
+
+  if (exponent_is_neg) {
+    exponent = -exponent;
+  }
+
+  int significand_bits = Traits::kBits - Clz(significand);
+  // -1 for the implicit 1 bit of the significand.
+  exponent += significand_exponent + significand_bits - 1;
+
+  if (exponent <= Traits::kMinExp) {
+    // Maybe subnormal.
+    auto update_seen_trailing_non_zero = [&](int shift) {
+      assert(shift > 0);
+      auto mask = (Uint(1) << (shift - 1)) - 1;
+      seen_trailing_non_zero |= (significand & mask) != 0;
+    };
+
+    // Normalize significand.
+    if (significand_bits > Traits::kSigBits) {
+      int shift = significand_bits - Traits::kSigBits;
+      update_seen_trailing_non_zero(shift);
+      significand >>= shift;
+    } else if (significand_bits < Traits::kSigBits) {
+      significand <<= (Traits::kSigBits - significand_bits);
+    }
+
+    int shift = Traits::kMinExp - exponent;
+    if (shift <= Traits::kSigBits) {
+      if (shift) {
+        update_seen_trailing_non_zero(shift);
+        significand =
+            ShiftAndRoundToNearest(significand, shift, seen_trailing_non_zero) &
+            Traits::kSigMask;
+      }
+      exponent = Traits::kMinExp;
+
+      if (significand != 0) {
+        *out_bits = Make(is_neg, exponent, significand);
+        return Result::Ok;
+      }
+    }
+
+    // Not subnormal, too small; return 0 or -0.
+    *out_bits = Make(is_neg, Traits::kMinExp, 0);
+  } else {
+    // Maybe Normal value.
+    if (significand_bits > Traits::kSigPlusOneBits) {
+      significand = ShiftAndRoundToNearest(
+          significand, significand_bits - Traits::kSigPlusOneBits,
+          seen_trailing_non_zero);
+      if (significand > Traits::kSigPlusOneMask) {
+        exponent++;
+      }
+    } else if (significand_bits < Traits::kSigPlusOneBits) {
+      significand <<= (Traits::kSigPlusOneBits - significand_bits);
+    }
+
+    if (exponent >= Traits::kMaxExp) {
+      // Would be inf or -inf, but the spec doesn't allow rounding hex-floats to
+      // infinity.
+      return Result::Error;
+    }
+
+    *out_bits = Make(is_neg, exponent, significand & Traits::kSigMask);
+  }
+
+  return Result::Ok;
+}
+
+// static
+template <typename T>
+void FloatParser<T>::ParseInfinity(const char* s,
+                                   const char* end,
+                                   Uint* out_bits) {
+  bool is_neg = false;
+  if (*s == '-') {
+    is_neg = true;
+    s++;
+  } else if (*s == '+') {
+    s++;
+  }
+  assert(StringStartsWith(s, end, "inf"));
+  *out_bits = Make(is_neg, Traits::kMaxExp, 0);
+}
+
+// static
+template <typename T>
+Result FloatParser<T>::Parse(LiteralType literal_type,
+                             const char* s,
+                             const char* end,
+                             Uint* out_bits) {
+#if COMPILER_IS_MSVC
+  if (literal_type == LiteralType::Int && StringStartsWith(s, end, "0x")) {
+    // Some MSVC crt implementation of strtof doesn't support hex strings
+    literal_type = LiteralType::Hexfloat;
+  }
+#endif
+  switch (literal_type) {
+    case LiteralType::Int:
+    case LiteralType::Float:
+      return ParseFloat(s, end, out_bits);
+
+    case LiteralType::Hexfloat:
+      return ParseHex(s, end, out_bits);
+
+    case LiteralType::Infinity:
+      ParseInfinity(s, end, out_bits);
+      return Result::Ok;
+
+    case LiteralType::Nan:
+      return ParseNan(s, end, out_bits);
+  }
+
+  WABT_UNREACHABLE;
+}
+
+// static
+template <typename T>
+void FloatWriter<T>::WriteHex(char* out, size_t size, Uint bits) {
+  static constexpr int kNumNybbles = Traits::kBits / 4;
+  static constexpr int kTopNybbleShift = Traits::kBits - 4;
+  static constexpr Uint kTopNybble = Uint(0xf) << kTopNybbleShift;
+  static const char s_hex_digits[] = "0123456789abcdef";
+
+  char buffer[Traits::kMaxHexBufferSize];
+  char* p = buffer;
+  bool is_neg = (bits >> Traits::kSignShift);
+  int exp = ((bits >> Traits::kSigBits) & Traits::kExpMask) - Traits::kExpBias;
+  Uint sig = bits & Traits::kSigMask;
+
+  if (is_neg) {
+    *p++ = '-';
+  }
+  if (exp == Traits::kMaxExp) {
+    // Infinity or nan.
+    if (sig == 0) {
+      strcpy(p, "inf");
+      p += 3;
+    } else {
+      strcpy(p, "nan");
+      p += 3;
+      if (sig != Traits::kQuietNanTag) {
+        strcpy(p, ":0x");
+        p += 3;
+        // Skip leading zeroes.
+        int num_nybbles = kNumNybbles;
+        while ((sig & kTopNybble) == 0) {
+          sig <<= 4;
+          num_nybbles--;
+        }
+        while (num_nybbles) {
+          Uint nybble = (sig >> kTopNybbleShift) & 0xf;
+          *p++ = s_hex_digits[nybble];
+          sig <<= 4;
+          --num_nybbles;
+        }
+      }
+    }
+  } else {
+    bool is_zero = sig == 0 && exp == Traits::kMinExp;
+    strcpy(p, "0x");
+    p += 2;
+    *p++ = is_zero ? '0' : '1';
+
+    // Shift sig up so the top 4-bits are at the top of the Uint.
+    sig <<= Traits::kBits - Traits::kSigBits;
+
+    if (sig) {
+      if (exp == Traits::kMinExp) {
+        // Subnormal; shift the significand up, and shift out the implicit 1.
+        Uint leading_zeroes = Clz(sig);
+        if (leading_zeroes < Traits::kSignShift) {
+          sig <<= leading_zeroes + 1;
+        } else {
+          sig = 0;
+        }
+        exp -= leading_zeroes;
+      }
+
+      *p++ = '.';
+      while (sig) {
+        int nybble = (sig >> kTopNybbleShift) & 0xf;
+        *p++ = s_hex_digits[nybble];
+        sig <<= 4;
+      }
+    }
+    *p++ = 'p';
+    if (is_zero) {
+      strcpy(p, "+0");
+      p += 2;
+    } else {
+      if (exp < 0) {
+        *p++ = '-';
+        exp = -exp;
+      } else {
+        *p++ = '+';
+      }
+      if (exp >= 1000) {
+        *p++ = '1';
+      }
+      if (exp >= 100) {
+        *p++ = '0' + (exp / 100) % 10;
+      }
+      if (exp >= 10) {
+        *p++ = '0' + (exp / 10) % 10;
+      }
+      *p++ = '0' + exp % 10;
+    }
+  }
+
+  size_t len = p - buffer;
+  if (len >= size) {
+    len = size - 1;
+  }
+  memcpy(out, buffer, len);
+  out[len] = '\0';
+}
+
+}  // end anonymous namespace
+
+Result ParseHexdigit(char c, uint32_t* out) {
+  if (static_cast<unsigned int>(c - '0') <= 9) {
+    *out = c - '0';
+    return Result::Ok;
+  } else if (static_cast<unsigned int>(c - 'a') < 6) {
+    *out = 10 + (c - 'a');
+    return Result::Ok;
+  } else if (static_cast<unsigned int>(c - 'A') < 6) {
+    *out = 10 + (c - 'A');
+    return Result::Ok;
+  }
+  return Result::Error;
+}
+
+Result ParseUint64(const char* s, const char* end, uint64_t* out) {
+  if (s == end) {
+    return Result::Error;
+  }
   uint64_t value = 0;
   if (*s == '0' && s + 1 < end && s[1] == 'x') {
     s += 2;
-    if (s == end)
+    if (s == end) {
       return Result::Error;
+    }
+    constexpr uint64_t kMaxDiv16 = UINT64_MAX / 16;
+    constexpr uint64_t kMaxMod16 = UINT64_MAX % 16;
     for (; s < end; ++s) {
       uint32_t digit;
-      if (WABT_FAILED(parse_hexdigit(*s, &digit)))
+      if (*s == '_') {
+        continue;
+      }
+      CHECK_RESULT(ParseHexdigit(*s, &digit));
+      // Check for overflow.
+      if (value > kMaxDiv16 || (value == kMaxDiv16 && digit > kMaxMod16)) {
         return Result::Error;
-      uint64_t old_value = value;
+      }
       value = value * 16 + digit;
-      /* check for overflow */
-      if (old_value > value)
-        return Result::Error;
     }
   } else {
+    constexpr uint64_t kMaxDiv10 = UINT64_MAX / 10;
+    constexpr uint64_t kMaxMod10 = UINT64_MAX % 10;
     for (; s < end; ++s) {
+      if (*s == '_') {
+        continue;
+      }
       uint32_t digit = (*s - '0');
-      if (digit > 9)
+      if (digit > 9) {
         return Result::Error;
-      uint64_t old_value = value;
+      }
+      // Check for overflow.
+      if (value > kMaxDiv10 || (value == kMaxDiv10 && digit > kMaxMod10)) {
+        return Result::Error;
+      }
       value = value * 10 + digit;
-      /* check for overflow */
-      if (old_value > value)
-        return Result::Error;
     }
   }
-  if (s != end)
+  if (s != end) {
     return Result::Error;
+  }
   *out = value;
   return Result::Ok;
 }
 
-Result parse_int64(const char* s,
-                   const char* end,
-                   uint64_t* out,
-                   ParseIntType parse_type) {
+Result ParseInt64(const char* s,
+                  const char* end,
+                  uint64_t* out,
+                  ParseIntType parse_type) {
   bool has_sign = false;
   if (*s == '-' || *s == '+') {
-    if (parse_type == ParseIntType::UnsignedOnly)
+    if (parse_type == ParseIntType::UnsignedOnly) {
       return Result::Error;
-    if (*s == '-')
+    }
+    if (*s == '-') {
       has_sign = true;
+    }
     s++;
   }
   uint64_t value = 0;
-  Result result = parse_uint64(s, end, &value);
+  Result result = ParseUint64(s, end, &value);
   if (has_sign) {
-    /* abs(INT64_MIN) == INT64_MAX + 1 */
-    if (value > static_cast<uint64_t>(INT64_MAX) + 1)
+    // abs(INT64_MIN) == INT64_MAX + 1.
+    if (value > static_cast<uint64_t>(INT64_MAX) + 1) {
       return Result::Error;
+    }
     value = UINT64_MAX - value + 1;
   }
   *out = value;
   return result;
 }
 
-Result parse_int32(const char* s,
-                   const char* end,
-                   uint32_t* out,
-                   ParseIntType parse_type) {
+namespace {
+uint32_t AddWithCarry(uint32_t x, uint32_t y, uint32_t* carry) {
+  // Increments *carry if the addition overflows, otherwise leaves carry alone.
+  if ((0xffffffff - x) < y) ++*carry;
+  return x + y;
+}
+
+void Mul10(v128* v) {
+  // Multiply-by-10 decomposes into (x << 3) + (x << 1). We implement those
+  // operations with carrying from smaller quads of the v128 to the larger
+  // quads.
+
+  constexpr uint32_t kTopThreeBits = 0xe0000000;
+  constexpr uint32_t kTopBit = 0x80000000;
+
+  uint32_t carry_into_v1 =
+      ((v->u32(0) & kTopThreeBits) >> 29) + ((v->u32(0) & kTopBit) >> 31);
+  v->set_u32(0, AddWithCarry(v->u32(0) << 3, v->u32(0) << 1, &carry_into_v1));
+  uint32_t carry_into_v2 =
+      ((v->u32(1) & kTopThreeBits) >> 29) + ((v->u32(1) & kTopBit) >> 31);
+  v->set_u32(1, AddWithCarry(v->u32(1) << 3, v->u32(1) << 1, &carry_into_v2));
+  v->set_u32(1, AddWithCarry(v->u32(1), carry_into_v1, &carry_into_v2));
+  uint32_t carry_into_v3 =
+      ((v->u32(2) & kTopThreeBits) >> 29) + ((v->u32(2) & kTopBit) >> 31);
+  v->set_u32(2, AddWithCarry(v->u32(2) << 3, v->u32(2) << 1, &carry_into_v3));
+  v->set_u32(2, AddWithCarry(v->u32(2), carry_into_v2, &carry_into_v3));
+  v->set_u32(3, v->u32(3) * 10 + carry_into_v3);
+}
+}
+
+Result ParseUint128(const char* s,
+                    const char* end,
+                    v128* out) {
+  if (s == end) {
+    return Result::Error;
+  }
+
+  out->set_zero();
+
+  while (true) {
+    uint32_t digit = (*s - '0');
+    if (digit > 9) {
+      return Result::Error;
+    }
+
+    uint32_t carry_into_v1 = 0;
+    uint32_t carry_into_v2 = 0;
+    uint32_t carry_into_v3 = 0;
+    uint32_t overflow = 0;
+    out->set_u32(0, AddWithCarry(out->u32(0), digit, &carry_into_v1));
+    out->set_u32(1, AddWithCarry(out->u32(1), carry_into_v1, &carry_into_v2));
+    out->set_u32(2, AddWithCarry(out->u32(2), carry_into_v2, &carry_into_v3));
+    out->set_u32(3, AddWithCarry(out->u32(3), carry_into_v3, &overflow));
+    if (overflow) {
+      return Result::Error;
+    }
+
+    ++s;
+
+    if (s == end) {
+      break;
+    }
+
+    Mul10(out);
+  }
+  return Result::Ok;
+}
+
+template <typename U>
+Result ParseInt(const char* s,
+                const char* end,
+                U* out,
+                ParseIntType parse_type) {
+  typedef typename std::make_signed<U>::type S;
   uint64_t value;
   bool has_sign = false;
   if (*s == '-' || *s == '+') {
-    if (parse_type == ParseIntType::UnsignedOnly)
+    if (parse_type == ParseIntType::UnsignedOnly) {
       return Result::Error;
-    if (*s == '-')
+    }
+    if (*s == '-') {
       has_sign = true;
+    }
     s++;
   }
-  if (WABT_FAILED(parse_uint64(s, end, &value)))
-    return Result::Error;
+  CHECK_RESULT(ParseUint64(s, end, &value));
 
   if (has_sign) {
-    /* abs(INT32_MIN) == INT32_MAX + 1 */
-    if (value > static_cast<uint64_t>(INT32_MAX) + 1)
+    // abs(INTN_MIN) == INTN_MAX + 1.
+    if (value > static_cast<uint64_t>(std::numeric_limits<S>::max()) + 1) {
       return Result::Error;
-    value = UINT32_MAX - value + 1;
+    }
+    value = std::numeric_limits<U>::max() - value + 1;
   } else {
-    if (value > static_cast<uint64_t>(UINT32_MAX))
+    if (value > static_cast<uint64_t>(std::numeric_limits<U>::max())) {
       return Result::Error;
+    }
   }
-  *out = static_cast<uint32_t>(value);
+  *out = static_cast<U>(value);
   return Result::Ok;
 }
 
-/* floats */
-static uint32_t make_float(bool sign, int exp, uint32_t sig) {
-  assert(exp >= F32_MIN_EXP && exp <= F32_MAX_EXP);
-  assert(sig <= F32_SIG_MASK);
-  return (static_cast<uint32_t>(sign) << F32_SIGN_SHIFT) |
-         (static_cast<uint32_t>(exp + F32_EXP_BIAS) << F32_SIG_BITS) | sig;
+Result ParseInt8(const char* s,
+                 const char* end,
+                 uint8_t* out,
+                 ParseIntType parse_type) {
+  return ParseInt(s, end, out, parse_type);
 }
 
-static uint32_t shift_float_and_round_to_nearest(uint32_t significand,
-                                                 int shift) {
-  assert(shift > 0);
-  /* round ties to even */
-  if (significand & (1U << shift))
-    significand += 1U << (shift - 1);
-  significand >>= shift;
-  return significand;
+Result ParseInt16(const char* s,
+                  const char* end,
+                  uint16_t* out,
+                  ParseIntType parse_type) {
+  return ParseInt(s, end, out, parse_type);
 }
 
-static Result parse_float_nan(const char* s,
-                              const char* end,
-                              uint32_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
-  }
-  assert(string_starts_with(s, end, "nan"));
-  s += 3;
-
-  uint32_t tag;
-  if (s != end) {
-    tag = 0;
-    assert(string_starts_with(s, end, ":0x"));
-    s += 3;
-
-    for (; s < end; ++s) {
-      uint32_t digit;
-      if (WABT_FAILED(parse_hexdigit(*s, &digit)))
-        return Result::Error;
-      tag = tag * 16 + digit;
-      /* check for overflow */
-      if (tag > F32_SIG_MASK)
-        return Result::Error;
-    }
-
-    /* NaN cannot have a zero tag, that is reserved for infinity */
-    if (tag == 0)
-      return Result::Error;
-  } else {
-    tag = F32_QUIET_NAN_TAG;
-  }
-
-  *out_bits = make_float(is_neg, F32_MAX_EXP, tag);
-  return Result::Ok;
+Result ParseInt32(const char* s,
+                  const char* end,
+                  uint32_t* out,
+                  ParseIntType parse_type) {
+  return ParseInt(s, end, out, parse_type);
 }
 
-static void parse_float_hex(const char* s,
-                            const char* end,
-                            uint32_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
-  }
-  assert(string_starts_with(s, end, "0x"));
-  s += 2;
-
-  /* loop over the significand; everything up to the 'p'.
-   this code is a bit nasty because we want to support extra zeroes anywhere
-   without having to use many significand bits.
-   e.g.
-   0x00000001.0p0 => significand = 1, significand_exponent = 0
-   0x10000000.0p0 => significand = 1, significand_exponent = 28
-   0x0.000001p0 => significand = 1, significand_exponent = -24
-   */
-  bool seen_dot = false;
-  uint32_t significand = 0;
-  /* how much to shift |significand| if a non-zero value is appended */
-  int significand_shift = 0;
-  int significand_bits = 0;     /* bits of |significand| */
-  int significand_exponent = 0; /* exponent adjustment due to dot placement */
-  for (; s < end; ++s) {
-    uint32_t digit;
-    if (*s == '.') {
-      if (significand != 0)
-        significand_exponent += significand_shift;
-      significand_shift = 0;
-      seen_dot = true;
-      continue;
-    } else if (WABT_FAILED(parse_hexdigit(*s, &digit))) {
-      break;
-    }
-    significand_shift += HEX_DIGIT_BITS;
-    if (digit != 0 && (significand == 0 ||
-                       significand_bits + significand_shift <=
-                           F32_SIG_BITS + 1 + HEX_DIGIT_BITS)) {
-      if (significand != 0)
-        significand <<= significand_shift;
-      if (seen_dot)
-        significand_exponent -= significand_shift;
-      significand += digit;
-      significand_shift = 0;
-      significand_bits += HEX_DIGIT_BITS;
-    }
-  }
-
-  if (!seen_dot)
-    significand_exponent += significand_shift;
-
-  assert(s < end && *s == 'p');
-  s++;
-
-  if (significand == 0) {
-    /* 0 or -0 */
-    *out_bits = make_float(is_neg, F32_MIN_EXP, 0);
-    return;
-  }
-
-  assert(s < end);
-  int exponent = 0;
-  bool exponent_is_neg = false;
-  /* exponent is always positive, but significand_exponent is signed.
-   significand_exponent_add is negated if exponent will be negative, so it  can
-   be easily summed to see if the exponent is too large (see below) */
-  int significand_exponent_add = 0;
-  if (*s == '-') {
-    exponent_is_neg = true;
-    significand_exponent_add = -significand_exponent;
-    s++;
-  } else if (*s == '+') {
-    s++;
-    significand_exponent_add = significand_exponent;
-  }
-
-  for (; s < end; ++s) {
-    uint32_t digit = (*s - '0');
-    assert(digit <= 9);
-    exponent = exponent * 10 + digit;
-    if (exponent + significand_exponent_add >= F32_MAX_EXP)
-      break;
-  }
-
-  if (exponent_is_neg)
-    exponent = -exponent;
-
-  significand_bits = sizeof(uint32_t) * 8 - wabt_clz_u32(significand);
-  /* -1 for the implicit 1 bit of the significand */
-  exponent += significand_exponent + significand_bits - 1;
-
-  if (exponent >= F32_MAX_EXP) {
-    /* inf or -inf */
-    *out_bits = make_float(is_neg, F32_MAX_EXP, 0);
-  } else if (exponent <= F32_MIN_EXP) {
-    /* maybe subnormal */
-    if (significand_bits > F32_SIG_BITS) {
-      significand = shift_float_and_round_to_nearest(
-          significand, significand_bits - F32_SIG_BITS);
-    } else if (significand_bits < F32_SIG_BITS) {
-      significand <<= (F32_SIG_BITS - significand_bits);
-    }
-
-    int shift = F32_MIN_EXP - exponent;
-    if (shift < F32_SIG_BITS) {
-      if (shift) {
-        significand =
-            shift_float_and_round_to_nearest(significand, shift) & F32_SIG_MASK;
-      }
-      exponent = F32_MIN_EXP;
-
-      if (significand != 0) {
-        *out_bits = make_float(is_neg, exponent, significand);
-        return;
-      }
-    }
-
-    /* not subnormal, too small; return 0 or -0 */
-    *out_bits = make_float(is_neg, F32_MIN_EXP, 0);
-  } else {
-    /* normal value */
-    if (significand_bits > F32_SIG_PLUS_ONE_BITS) {
-      significand = shift_float_and_round_to_nearest(
-          significand, significand_bits - F32_SIG_PLUS_ONE_BITS);
-      if (significand > F32_SIG_PLUS_ONE_MASK)
-        exponent++;
-    } else if (significand_bits < F32_SIG_PLUS_ONE_BITS) {
-      significand <<= (F32_SIG_PLUS_ONE_BITS - significand_bits);
-    }
-
-    *out_bits = make_float(is_neg, exponent, significand & F32_SIG_MASK);
-  }
+Result ParseFloat(LiteralType literal_type,
+                  const char* s,
+                  const char* end,
+                  uint32_t* out_bits) {
+  return FloatParser<float>::Parse(literal_type, s, end, out_bits);
 }
 
-static void parse_float_infinity(const char* s,
-                                 const char* end,
-                                 uint32_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
-  }
-  assert(string_starts_with(s, end, "infinity"));
-  *out_bits = make_float(is_neg, F32_MAX_EXP, 0);
-}
-
-Result parse_float(LiteralType literal_type,
+Result ParseDouble(LiteralType literal_type,
                    const char* s,
                    const char* end,
-                   uint32_t* out_bits) {
-  switch (literal_type) {
-    case LiteralType::Int:
-    case LiteralType::Float: {
-      errno = 0;
-      char* endptr;
-      float value;
-      value = strtof(s, &endptr);
-      if (endptr != end ||
-          ((value == 0 || value == HUGE_VALF || value == -HUGE_VALF) &&
-           errno != 0))
-        return Result::Error;
-
-      memcpy(out_bits, &value, sizeof(value));
-      return Result::Ok;
-    }
-
-    case LiteralType::Hexfloat:
-      parse_float_hex(s, end, out_bits);
-      return Result::Ok;
-
-    case LiteralType::Infinity:
-      parse_float_infinity(s, end, out_bits);
-      return Result::Ok;
-
-    case LiteralType::Nan:
-      return parse_float_nan(s, end, out_bits);
-
-    default:
-      assert(0);
-      return Result::Error;
-  }
+                   uint64_t* out_bits) {
+  return FloatParser<double>::Parse(literal_type, s, end, out_bits);
 }
 
-void write_float_hex(char* out, size_t size, uint32_t bits) {
-  /* 1234567890123456 */
-  /* -0x#.######p-### */
-  /* -nan:0x###### */
-  /* -infinity */
-  char buffer[WABT_MAX_FLOAT_HEX];
-  char* p = buffer;
-  bool is_neg = (bits >> F32_SIGN_SHIFT);
-  int exp = ((bits >> F32_SIG_BITS) & F32_EXP_MASK) - F32_EXP_BIAS;
-  uint32_t sig = bits & F32_SIG_MASK;
+void WriteFloatHex(char* buffer, size_t size, uint32_t bits) {
+  return FloatWriter<float>::WriteHex(buffer, size, bits);
+}
 
-  if (is_neg)
-    *p++ = '-';
-  if (exp == F32_MAX_EXP) {
-    /* infinity or nan */
-    if (sig == 0) {
-      strcpy(p, "infinity");
-      p += 8;
-    } else {
-      strcpy(p, "nan");
-      p += 3;
-      if (sig != F32_QUIET_NAN_TAG) {
-        strcpy(p, ":0x");
-        p += 3;
-        /* skip leading zeroes */
-        int num_nybbles = sizeof(uint32_t) * 8 / 4;
-        while ((sig & 0xf0000000) == 0) {
-          sig <<= 4;
-          num_nybbles--;
-        }
-        while (num_nybbles) {
-          uint32_t nybble = (sig >> (sizeof(uint32_t) * 8 - 4)) & 0xf;
-          *p++ = s_hex_digits[nybble];
-          sig <<= 4;
-          --num_nybbles;
-        }
-      }
+void WriteDoubleHex(char* buffer, size_t size, uint64_t bits) {
+  return FloatWriter<double>::WriteHex(buffer, size, bits);
+}
+
+void WriteUint128(char* buffer, size_t size, v128 bits) {
+  uint64_t digits;
+  uint64_t remainder;
+  char reversed_buffer[40];
+  size_t len = 0;
+  do {
+    remainder = bits.u32(3);
+
+    for (int i = 3; i != 0; --i) {
+      digits = remainder / 10;
+      remainder = ((remainder - digits * 10) << 32) + bits.u32(i-1);
+      bits.set_u32(i, digits);
     }
-  } else {
-    bool is_zero = sig == 0 && exp == F32_MIN_EXP;
-    strcpy(p, "0x");
-    p += 2;
-    *p++ = is_zero ? '0' : '1';
 
-    /* shift sig up so the top 4-bits are at the top of the uint32 */
-    sig <<= sizeof(uint32_t) * 8 - F32_SIG_BITS;
+    digits = remainder / 10;
+    remainder = remainder - digits * 10;
+    bits.set_u32(0, digits);
 
-    if (sig) {
-      if (exp == F32_MIN_EXP) {
-        /* subnormal; shift the significand up, and shift out the implicit 1 */
-        uint32_t leading_zeroes = wabt_clz_u32(sig);
-        if (leading_zeroes < 31)
-          sig <<= leading_zeroes + 1;
-        else
-          sig = 0;
-        exp -= leading_zeroes;
-      }
-
-      *p++ = '.';
-      while (sig) {
-        uint32_t nybble = (sig >> (sizeof(uint32_t) * 8 - 4)) & 0xf;
-        *p++ = s_hex_digits[nybble];
-        sig <<= 4;
-      }
-    }
-    *p++ = 'p';
-    if (is_zero) {
-      strcpy(p, "+0");
-      p += 2;
-    } else {
-      if (exp < 0) {
-        *p++ = '-';
-        exp = -exp;
-      } else {
-        *p++ = '+';
-      }
-      if (exp >= 100)
-        *p++ = '1';
-      if (exp >= 10)
-        *p++ = '0' + (exp / 10) % 10;
-      *p++ = '0' + exp % 10;
-    }
-  }
-
-  size_t len = p - buffer;
-  if (len >= size)
+    char remainder_buffer[21];
+    snprintf(remainder_buffer, 21, "%" PRIu64, remainder);
+    int remainder_buffer_len = strlen(remainder_buffer);
+    assert(len + remainder_buffer_len < sizeof(reversed_buffer));
+    memcpy(&reversed_buffer[len], remainder_buffer, remainder_buffer_len);
+    len += remainder_buffer_len;
+  } while (!bits.is_zero());
+  size_t truncated_tail = 0;
+  if (len >= size) {
+    truncated_tail = len - size + 1;
     len = size - 1;
-  memcpy(out, buffer, len);
-  out[len] = '\0';
-}
-
-/* doubles */
-static uint64_t make_double(bool sign, int exp, uint64_t sig) {
-  assert(exp >= F64_MIN_EXP && exp <= F64_MAX_EXP);
-  assert(sig <= F64_SIG_MASK);
-  return (static_cast<uint64_t>(sign) << F64_SIGN_SHIFT) |
-         (static_cast<uint64_t>(exp + F64_EXP_BIAS) << F64_SIG_BITS) | sig;
-}
-
-static uint64_t shift_double_and_round_to_nearest(uint64_t significand,
-                                                  int shift) {
-  assert(shift > 0);
-  /* round ties to even */
-  if (significand & (static_cast<uint64_t>(1) << shift))
-    significand += static_cast<uint64_t>(1) << (shift - 1);
-  significand >>= shift;
-  return significand;
-}
-
-static Result parse_double_nan(const char* s,
-                               const char* end,
-                               uint64_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
   }
-  assert(string_starts_with(s, end, "nan"));
-  s += 3;
-
-  uint64_t tag;
-  if (s != end) {
-    tag = 0;
-    if (!string_starts_with(s, end, ":0x"))
-      return Result::Error;
-    s += 3;
-
-    for (; s < end; ++s) {
-      uint32_t digit;
-      if (WABT_FAILED(parse_hexdigit(*s, &digit)))
-        return Result::Error;
-      tag = tag * 16 + digit;
-      /* check for overflow */
-      if (tag > F64_SIG_MASK)
-        return Result::Error;
-    }
-
-    /* NaN cannot have a zero tag, that is reserved for infinity */
-    if (tag == 0)
-      return Result::Error;
-  } else {
-    tag = F64_QUIET_NAN_TAG;
-  }
-
-  *out_bits = make_double(is_neg, F64_MAX_EXP, tag);
-  return Result::Ok;
-}
-
-static void parse_double_hex(const char* s,
-                             const char* end,
-                             uint64_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
-  }
-  assert(string_starts_with(s, end, "0x"));
-  s += 2;
-
-  /* see the similar comment in parse_float_hex */
-  bool seen_dot = false;
-  uint64_t significand = 0;
-  /* how much to shift |significand| if a non-zero value is appended */
-  int significand_shift = 0;
-  int significand_bits = 0;     /* bits of |significand| */
-  int significand_exponent = 0; /* exponent adjustment due to dot placement */
-  for (; s < end; ++s) {
-    uint32_t digit;
-    if (*s == '.') {
-      if (significand != 0)
-        significand_exponent += significand_shift;
-      significand_shift = 0;
-      seen_dot = true;
-      continue;
-    } else if (WABT_FAILED(parse_hexdigit(*s, &digit))) {
-      break;
-    }
-    significand_shift += HEX_DIGIT_BITS;
-    if (digit != 0 && (significand == 0 ||
-                       significand_bits + significand_shift <=
-                           F64_SIG_BITS + 1 + HEX_DIGIT_BITS)) {
-      if (significand != 0)
-        significand <<= significand_shift;
-      if (seen_dot)
-        significand_exponent -= significand_shift;
-      significand += digit;
-      significand_shift = 0;
-      significand_bits += HEX_DIGIT_BITS;
-    }
-  }
-
-  if (!seen_dot)
-    significand_exponent += significand_shift;
-
-  assert(s < end && *s == 'p');
-  s++;
-
-  if (significand == 0) {
-    /* 0 or -0 */
-    *out_bits = make_double(is_neg, F64_MIN_EXP, 0);
-    return;
-  }
-
-  assert(s < end);
-  int exponent = 0;
-  bool exponent_is_neg = false;
-  /* exponent is always positive, but significand_exponent is signed.
-   significand_exponent_add is negated if exponent will be negative, so it  can
-   be easily summed to see if the exponent is too large (see below) */
-  int significand_exponent_add = 0;
-  if (*s == '-') {
-    exponent_is_neg = true;
-    significand_exponent_add = -significand_exponent;
-    s++;
-  } else if (*s == '+') {
-    s++;
-    significand_exponent_add = significand_exponent;
-  }
-
-  for (; s < end; ++s) {
-    uint32_t digit = (*s - '0');
-    assert(digit <= 9);
-    exponent = exponent * 10 + digit;
-    if (exponent + significand_exponent_add >= F64_MAX_EXP)
-      break;
-  }
-
-  if (exponent_is_neg)
-    exponent = -exponent;
-
-  significand_bits = sizeof(uint64_t) * 8 - wabt_clz_u64(significand);
-  /* -1 for the implicit 1 bit of the significand */
-  exponent += significand_exponent + significand_bits - 1;
-
-  if (exponent >= F64_MAX_EXP) {
-    /* inf or -inf */
-    *out_bits = make_double(is_neg, F64_MAX_EXP, 0);
-  } else if (exponent <= F64_MIN_EXP) {
-    /* maybe subnormal */
-    if (significand_bits > F64_SIG_BITS) {
-      significand = shift_double_and_round_to_nearest(
-          significand, significand_bits - F64_SIG_BITS);
-    } else if (significand_bits < F64_SIG_BITS) {
-      significand <<= (F64_SIG_BITS - significand_bits);
-    }
-
-    int shift = F64_MIN_EXP - exponent;
-    if (shift < F64_SIG_BITS) {
-      if (shift) {
-        significand = shift_double_and_round_to_nearest(significand, shift) &
-                      F64_SIG_MASK;
-      }
-      exponent = F64_MIN_EXP;
-
-      if (significand != 0) {
-        *out_bits = make_double(is_neg, exponent, significand);
-        return;
-      }
-    }
-
-    /* not subnormal, too small; return 0 or -0 */
-    *out_bits = make_double(is_neg, F64_MIN_EXP, 0);
-  } else {
-    /* normal value */
-    if (significand_bits > F64_SIG_PLUS_ONE_BITS) {
-      significand = shift_double_and_round_to_nearest(
-          significand, significand_bits - F64_SIG_PLUS_ONE_BITS);
-      if (significand > F64_SIG_PLUS_ONE_MASK)
-        exponent++;
-    } else if (significand_bits < F64_SIG_PLUS_ONE_BITS) {
-      significand <<= (F64_SIG_PLUS_ONE_BITS - significand_bits);
-    }
-
-    *out_bits = make_double(is_neg, exponent, significand & F64_SIG_MASK);
-  }
-}
-
-static void parse_double_infinity(const char* s,
-                                  const char* end,
-                                  uint64_t* out_bits) {
-  bool is_neg = false;
-  if (*s == '-') {
-    is_neg = true;
-    s++;
-  } else if (*s == '+') {
-    s++;
-  }
-  assert(string_starts_with(s, end, "infinity"));
-  *out_bits = make_double(is_neg, F64_MAX_EXP, 0);
-}
-
-Result parse_double(LiteralType literal_type,
-                    const char* s,
-                    const char* end,
-                    uint64_t* out_bits) {
-  switch (literal_type) {
-    case LiteralType::Int:
-    case LiteralType::Float: {
-      errno = 0;
-      char* endptr;
-      double value;
-      value = strtod(s, &endptr);
-      if (endptr != end ||
-          ((value == 0 || value == HUGE_VAL || value == -HUGE_VAL) &&
-           errno != 0))
-        return Result::Error;
-
-      memcpy(out_bits, &value, sizeof(value));
-      return Result::Ok;
-    }
-
-    case LiteralType::Hexfloat:
-      parse_double_hex(s, end, out_bits);
-      return Result::Ok;
-
-    case LiteralType::Infinity:
-      parse_double_infinity(s, end, out_bits);
-      return Result::Ok;
-
-    case LiteralType::Nan:
-      return parse_double_nan(s, end, out_bits);
-
-    default:
-      assert(0);
-      return Result::Error;
-  }
-}
-
-void write_double_hex(char* out, size_t size, uint64_t bits) {
-  /* 123456789012345678901234 */
-  /* -0x#.#############p-#### */
-  /* -nan:0x############# */
-  /* -infinity */
-  char buffer[WABT_MAX_DOUBLE_HEX];
-  char* p = buffer;
-  bool is_neg = (bits >> F64_SIGN_SHIFT);
-  int exp = ((bits >> F64_SIG_BITS) & F64_EXP_MASK) - F64_EXP_BIAS;
-  uint64_t sig = bits & F64_SIG_MASK;
-
-  if (is_neg)
-    *p++ = '-';
-  if (exp == F64_MAX_EXP) {
-    /* infinity or nan */
-    if (sig == 0) {
-      strcpy(p, "infinity");
-      p += 8;
-    } else {
-      strcpy(p, "nan");
-      p += 3;
-      if (sig != F64_QUIET_NAN_TAG) {
-        strcpy(p, ":0x");
-        p += 3;
-        /* skip leading zeroes */
-        int num_nybbles = sizeof(uint64_t) * 8 / 4;
-        while ((sig & 0xf000000000000000ULL) == 0) {
-          sig <<= 4;
-          num_nybbles--;
-        }
-        while (num_nybbles) {
-          uint32_t nybble = (sig >> (sizeof(uint64_t) * 8 - 4)) & 0xf;
-          *p++ = s_hex_digits[nybble];
-          sig <<= 4;
-          --num_nybbles;
-        }
-      }
-    }
-  } else {
-    bool is_zero = sig == 0 && exp == F64_MIN_EXP;
-    strcpy(p, "0x");
-    p += 2;
-    *p++ = is_zero ? '0' : '1';
-
-    /* shift sig up so the top 4-bits are at the top of the uint32 */
-    sig <<= sizeof(uint64_t) * 8 - F64_SIG_BITS;
-
-    if (sig) {
-      if (exp == F64_MIN_EXP) {
-        /* subnormal; shift the significand up, and shift out the implicit 1 */
-        uint32_t leading_zeroes = wabt_clz_u64(sig);
-        if (leading_zeroes < 63)
-          sig <<= leading_zeroes + 1;
-        else
-          sig = 0;
-        exp -= leading_zeroes;
-      }
-
-      *p++ = '.';
-      while (sig) {
-        uint32_t nybble = (sig >> (sizeof(uint64_t) * 8 - 4)) & 0xf;
-        *p++ = s_hex_digits[nybble];
-        sig <<= 4;
-      }
-    }
-    *p++ = 'p';
-    if (is_zero) {
-      strcpy(p, "+0");
-      p += 2;
-    } else {
-      if (exp < 0) {
-        *p++ = '-';
-        exp = -exp;
-      } else {
-        *p++ = '+';
-      }
-      if (exp >= 1000)
-        *p++ = '1';
-      if (exp >= 100)
-        *p++ = '0' + (exp / 100) % 10;
-      if (exp >= 10)
-        *p++ = '0' + (exp / 10) % 10;
-      *p++ = '0' + exp % 10;
-    }
-  }
-
-  size_t len = p - buffer;
-  if (len >= size)
-    len = size - 1;
-  memcpy(out, buffer, len);
-  out[len] = '\0';
+  std::reverse_copy(reversed_buffer + truncated_tail,
+                    reversed_buffer + len + truncated_tail,
+                    buffer);
+  buffer[len] = '\0';
 }
 
 }  // namespace wabt

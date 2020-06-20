@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (memory 1)
   (func
@@ -129,11 +129,12 @@
 0000065: 0b                                        ; end
 000001a: 4b                                        ; FIXUP func body size
 0000018: 4d                                        ; FIXUP section size
-store.wasm:	file format wasm 0x000001
+
+store.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-00001a func[0]:
+00001b func[0]:
  00001c: 41 00                      | i32.const 0
  00001e: 41 00                      | i32.const 0
  000020: 3a 00 00                   | i32.store8 0 0
@@ -161,4 +162,5 @@ Code Disassembly:
  000057: 41 00                      | i32.const 0
  000059: 44 00 00 00 00 00 00 00 00 | f64.const 0x0p+0
  000062: 39 03 00                   | f64.store 3 0
+ 000065: 0b                         | end
 ;;; STDOUT ;;)

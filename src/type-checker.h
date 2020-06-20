@@ -17,79 +17,169 @@
 #ifndef WABT_TYPE_CHECKER_H_
 #define WABT_TYPE_CHECKER_H_
 
-#include "common.h"
-#include "type-vector.h"
-#include "vector.h"
+#include <functional>
+#include <vector>
+
+#include "src/common.h"
+#include "src/feature.h"
+#include "src/opcode.h"
 
 namespace wabt {
 
-typedef void (*TypeCheckerErrorCallback)(const char* msg, void* user_data);
+class TypeChecker {
+ public:
+  typedef std::function<void(const char* msg)> ErrorCallback;
 
-struct TypeCheckerErrorHandler {
-  TypeCheckerErrorCallback on_error;
-  void* user_data;
+  struct Label {
+    Label(LabelType,
+          const TypeVector& param_types,
+          const TypeVector& result_types,
+          size_t limit);
+
+    TypeVector& br_types() {
+      return label_type == LabelType::Loop ? param_types : result_types;
+    }
+
+    LabelType label_type;
+    TypeVector param_types;
+    TypeVector result_types;
+    size_t type_stack_limit;
+    bool unreachable;
+  };
+
+  explicit TypeChecker(const Features& features) : features_(features) {}
+
+  void set_error_callback(const ErrorCallback& error_callback) {
+    error_callback_ = error_callback;
+  }
+
+  size_t type_stack_size() const { return type_stack_.size(); }
+
+  bool IsUnreachable();
+  Result GetLabel(Index depth, Label** out_label);
+
+  Result BeginFunction(const TypeVector& sig);
+  Result OnAtomicFence(uint32_t consistency_model);
+  Result OnAtomicLoad(Opcode);
+  Result OnAtomicNotify(Opcode);
+  Result OnAtomicStore(Opcode);
+  Result OnAtomicRmw(Opcode);
+  Result OnAtomicRmwCmpxchg(Opcode);
+  Result OnAtomicWait(Opcode);
+  Result OnBinary(Opcode);
+  Result OnBlock(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnBr(Index depth);
+  Result OnBrIf(Index depth);
+  Result OnBrOnExn(Index depth, const TypeVector& types);
+  Result BeginBrTable();
+  Result OnBrTableTarget(Index depth);
+  Result EndBrTable();
+  Result OnCall(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnCallIndirect(const TypeVector& param_types,
+                        const TypeVector& result_types);
+  Result OnReturnCall(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnReturnCallIndirect(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnCatch();
+  Result OnCompare(Opcode);
+  Result OnConst(Type);
+  Result OnConvert(Opcode);
+  Result OnDrop();
+  Result OnElse();
+  Result OnEnd();
+  Result OnGlobalGet(Type);
+  Result OnGlobalSet(Type);
+  Result OnIf(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnLoad(Opcode);
+  Result OnLocalGet(Type);
+  Result OnLocalSet(Type);
+  Result OnLocalTee(Type);
+  Result OnLoop(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnMemoryCopy();
+  Result OnDataDrop(Index);
+  Result OnMemoryFill();
+  Result OnMemoryGrow();
+  Result OnMemoryInit(Index);
+  Result OnMemorySize();
+  Result OnTableCopy();
+  Result OnElemDrop(Index);
+  Result OnTableInit(Index, Index);
+  Result OnTableGet(Type elem_type);
+  Result OnTableSet(Type elem_type);
+  Result OnTableGrow(Type elem_type);
+  Result OnTableSize();
+  Result OnTableFill(Type elem_type);
+  Result OnRefFuncExpr(Index func_index);
+  Result OnRefNullExpr(Type type);
+  Result OnRefIsNullExpr(Type type);
+  Result OnRethrow();
+  Result OnReturn();
+  Result OnSelect(Type expected);
+  Result OnSimdLaneOp(Opcode, uint64_t);
+  Result OnSimdShuffleOp(Opcode, v128);
+  Result OnStore(Opcode);
+  Result OnTernary(Opcode);
+  Result OnThrow(const TypeVector& sig);
+  Result OnTry(const TypeVector& param_types, const TypeVector& result_types);
+  Result OnUnary(Opcode);
+  Result OnUnreachable();
+  Result EndFunction();
+
+  static Result CheckType(Type actual, Type expected);
+
+ private:
+  void WABT_PRINTF_FORMAT(2, 3) PrintError(const char* fmt, ...);
+  Result TopLabel(Label** out_label);
+  void ResetTypeStackToLabel(Label* label);
+  Result SetUnreachable();
+  void PushLabel(LabelType label_type,
+                 const TypeVector& param_types,
+                 const TypeVector& result_types);
+  Result PopLabel();
+  Result CheckLabelType(Label* label, LabelType label_type);
+  Result GetThisFunctionLabel(Label **label);
+  Result PeekType(Index depth, Type* out_type);
+  Result PeekAndCheckType(Index depth, Type expected);
+  Result DropTypes(size_t drop_count);
+  void PushType(Type type);
+  void PushTypes(const TypeVector& types);
+  Result CheckTypeStackEnd(const char* desc);
+  Result CheckTypes(const TypeVector &actual, const TypeVector &expected);
+  Result CheckSignature(const TypeVector& sig, const char* desc);
+  Result CheckReturnSignature(const TypeVector& sig, const TypeVector &expected,const char *desc);
+  Result PopAndCheckSignature(const TypeVector& sig, const char* desc);
+  Result PopAndCheckCall(const TypeVector& param_types,
+                         const TypeVector& result_types,
+                         const char* desc);
+    Result PopAndCheck1Type(Type expected, const char* desc);
+  Result PopAndCheck2Types(Type expected1, Type expected2, const char* desc);
+  Result PopAndCheck3Types(Type expected1,
+                           Type expected2,
+                           Type expected3,
+                           const char* desc);
+  Result CheckOpcode1(Opcode opcode);
+  Result CheckOpcode2(Opcode opcode);
+  Result CheckOpcode3(Opcode opcode);
+  Result OnEnd(Label* label, const char* sig_desc, const char* end_desc);
+
+  template <typename... Args>
+  void PrintStackIfFailed(Result result, const char* desc, Args... args) {
+    // Minor optimization, check result before constructing the vector to pass
+    // to the other overload of PrintStackIfFailed.
+    if (Failed(result)) {
+      PrintStackIfFailed(result, desc, {args...});
+    }
+  }
+
+  void PrintStackIfFailed(Result, const char* desc, const TypeVector&);
+
+  ErrorCallback error_callback_;
+  TypeVector type_stack_;
+  std::vector<Label> label_stack_;
+  // Cache the expected br_table signature. It will be initialized to `nullptr`
+  // to represent "any".
+  TypeVector* br_table_sig_ = nullptr;
+  Features features_;
 };
-
-struct TypeCheckerLabel {
-  LabelType label_type;
-  TypeVector sig;
-  size_t type_stack_limit;
-  bool unreachable;
-};
-WABT_DEFINE_VECTOR(type_checker_label, TypeCheckerLabel);
-
-struct TypeChecker {
-  TypeCheckerErrorHandler* error_handler;
-  TypeVector type_stack;
-  TypeCheckerLabelVector label_stack;
-  /* TODO(binji): will need to be complete signature when signatures with
-   * multiple types are allowed. */
-  Type br_table_sig;
-};
-
-void destroy_typechecker(TypeChecker*);
-
-bool typechecker_is_unreachable(TypeChecker* tc);
-Result typechecker_get_label(TypeChecker* tc,
-                             size_t depth,
-                             TypeCheckerLabel** out_label);
-
-Result typechecker_begin_function(TypeChecker*, const TypeVector* sig);
-Result typechecker_on_binary(TypeChecker*, Opcode);
-Result typechecker_on_block(TypeChecker*, const TypeVector* sig);
-Result typechecker_on_br(TypeChecker*, size_t depth);
-Result typechecker_on_br_if(TypeChecker*, size_t depth);
-Result typechecker_begin_br_table(TypeChecker*);
-Result typechecker_on_br_table_target(TypeChecker*, size_t depth);
-Result typechecker_end_br_table(TypeChecker*);
-Result typechecker_on_call(TypeChecker*,
-                           const TypeVector* param_types,
-                           const TypeVector* result_types);
-Result typechecker_on_call_indirect(TypeChecker*,
-                                    const TypeVector* param_types,
-                                    const TypeVector* result_types);
-Result typechecker_on_compare(TypeChecker*, Opcode);
-Result typechecker_on_const(TypeChecker*, Type);
-Result typechecker_on_convert(TypeChecker*, Opcode);
-Result typechecker_on_current_memory(TypeChecker*);
-Result typechecker_on_drop(TypeChecker*);
-Result typechecker_on_else(TypeChecker*);
-Result typechecker_on_end(TypeChecker*);
-Result typechecker_on_get_global(TypeChecker*, Type);
-Result typechecker_on_get_local(TypeChecker*, Type);
-Result typechecker_on_grow_memory(TypeChecker*);
-Result typechecker_on_if(TypeChecker*, const TypeVector* sig);
-Result typechecker_on_load(TypeChecker*, Opcode);
-Result typechecker_on_loop(TypeChecker*, const TypeVector* sig);
-Result typechecker_on_return(TypeChecker*);
-Result typechecker_on_select(TypeChecker*);
-Result typechecker_on_set_global(TypeChecker*, Type);
-Result typechecker_on_set_local(TypeChecker*, Type);
-Result typechecker_on_store(TypeChecker*, Opcode);
-Result typechecker_on_tee_local(TypeChecker*, Type);
-Result typechecker_on_unary(TypeChecker*, Opcode);
-Result typechecker_on_unreachable(TypeChecker*);
-Result typechecker_end_function(TypeChecker*);
 
 }  // namespace wabt
 

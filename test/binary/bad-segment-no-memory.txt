@@ -1,5 +1,4 @@
-;;; ERROR: 1
-;;; TOOL: run-gen-wasm
+;;; TOOL: run-gen-wasm-bad
 magic
 version
 section(DATA) {
@@ -8,7 +7,6 @@ section(DATA) {
   data[str("hi")]
 }
 (;; STDERR ;;;
-Error running "wasm2wast":
-error: @0x0000000b: data section without memory section
-
+000000c: error: invalid data segment flags: 0x41
+000000c: error: invalid data segment flags: 0x41
 ;;; STDERR ;;)

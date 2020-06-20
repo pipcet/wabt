@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (memory
     (data "\00\01\02\03\04\05\06\07\08\09\0a")))
@@ -20,7 +20,7 @@
 000000f: 00                                        ; section size (guess)
 0000010: 01                                        ; num data segments
 ; data segment header 0
-0000011: 00                                        ; memory index
+0000011: 00                                        ; segment flags
 0000012: 41                                        ; i32.const
 0000013: 00                                        ; i32 literal
 0000014: 0b                                        ; end
@@ -28,7 +28,8 @@
 ; data segment data 0
 0000016: 0001 0203 0405 0607 0809 0a               ; data segment data
 000000f: 11                                        ; FIXUP section size
-memory-hex.wasm:	file format wasm 0x000001
+
+memory-hex.wasm:	file format wasm 0x1
 
 Code Disassembly:
 

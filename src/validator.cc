@@ -14,886 +14,917 @@
  * limitations under the License.
  */
 
-#include "validator.h"
+#include "src/validator.h"
+
+#include <cassert>
+#include <cinttypes>
+#include <cstdarg>
+#include <cstdio>
+
 #include "config.h"
 
-#include <assert.h>
-#include <inttypes.h>
-#include <memory.h>
-#include <stdarg.h>
-#include <stdio.h>
-
-#include "ast-parser-lexer-shared.h"
-#include "binary-reader-ast.h"
-#include "binary-reader.h"
-#include "type-checker.h"
+#include "src/binary-reader.h"
+#include "src/cast.h"
+#include "src/expr-visitor.h"
+#include "src/ir.h"
+#include "src/shared-validator.h"
 
 namespace wabt {
 
-enum class ActionResultKind {
-  Error,
-  Types,
-  Type,
-};
+namespace {
 
-struct ActionResult {
-  ActionResultKind kind;
-  union {
-    const TypeVector* types;
-    Type type;
+class ScriptValidator {
+ public:
+  WABT_DISALLOW_COPY_AND_ASSIGN(ScriptValidator);
+  ScriptValidator(Errors*, const Script*, const ValidateOptions& options);
+
+  Result CheckScript();
+
+ private:
+  struct ActionResult {
+    enum class Kind {
+      Error,
+      Types,
+      Type,
+    } kind;
+
+    union {
+      const TypeVector* types;
+      Type type;
+    };
   };
+
+  void WABT_PRINTF_FORMAT(3, 4)
+      PrintError(const Location* loc, const char* fmt, ...);
+  void CheckTypeIndex(const Location* loc,
+                      Type actual,
+                      Type expected,
+                      const char* desc,
+                      Index index,
+                      const char* index_kind);
+  void CheckResultTypes(const Location* loc,
+                        const TypeVector& actual,
+                        const TypeVector& expected,
+                        const char* desc);
+
+  const TypeVector* CheckInvoke(const InvokeAction* action);
+  Result CheckGet(const GetAction* action, Type* out_type);
+  ActionResult CheckAction(const Action* action);
+  void CheckCommand(const Command* command);
+
+  const ValidateOptions& options_;
+  Errors* errors_ = nullptr;
+  const Script* script_ = nullptr;
+
+  Result result_ = Result::Ok;
 };
 
-struct Context {
-  SourceErrorHandler* error_handler;
-  AstLexer* lexer;
-  const Script* script;
-  const Module* current_module;
-  const Func* current_func;
-  int current_table_index;
-  int current_memory_index;
-  int current_global_index;
-  int num_imported_globals;
-  TypeChecker typechecker;
-  const Location* expr_loc; /* Cached for access by on_typechecker_error */
-  Result result;
+class Validator : public ExprVisitor::Delegate {
+ public:
+  Validator(Errors*, const Module* module, const ValidateOptions& options);
+
+  Result CheckModule();
+
+  Result OnBinaryExpr(BinaryExpr*) override;
+  Result BeginBlockExpr(BlockExpr*) override;
+  Result EndBlockExpr(BlockExpr*) override;
+  Result OnBrExpr(BrExpr*) override;
+  Result OnBrIfExpr(BrIfExpr*) override;
+  Result OnBrOnExnExpr(BrOnExnExpr*) override;
+  Result OnBrTableExpr(BrTableExpr*) override;
+  Result OnCallExpr(CallExpr*) override;
+  Result OnCallIndirectExpr(CallIndirectExpr*) override;
+  Result OnCompareExpr(CompareExpr*) override;
+  Result OnConstExpr(ConstExpr*) override;
+  Result OnConvertExpr(ConvertExpr*) override;
+  Result OnDropExpr(DropExpr*) override;
+  Result OnGlobalGetExpr(GlobalGetExpr*) override;
+  Result OnGlobalSetExpr(GlobalSetExpr*) override;
+  Result BeginIfExpr(IfExpr*) override;
+  Result AfterIfTrueExpr(IfExpr*) override;
+  Result EndIfExpr(IfExpr*) override;
+  Result OnLoadExpr(LoadExpr*) override;
+  Result OnLocalGetExpr(LocalGetExpr*) override;
+  Result OnLocalSetExpr(LocalSetExpr*) override;
+  Result OnLocalTeeExpr(LocalTeeExpr*) override;
+  Result BeginLoopExpr(LoopExpr*) override;
+  Result EndLoopExpr(LoopExpr*) override;
+  Result OnMemoryCopyExpr(MemoryCopyExpr*) override;
+  Result OnDataDropExpr(DataDropExpr*) override;
+  Result OnMemoryFillExpr(MemoryFillExpr*) override;
+  Result OnMemoryGrowExpr(MemoryGrowExpr*) override;
+  Result OnMemoryInitExpr(MemoryInitExpr*) override;
+  Result OnMemorySizeExpr(MemorySizeExpr*) override;
+  Result OnTableCopyExpr(TableCopyExpr*) override;
+  Result OnElemDropExpr(ElemDropExpr*) override;
+  Result OnTableInitExpr(TableInitExpr*) override;
+  Result OnTableGetExpr(TableGetExpr*) override;
+  Result OnTableSetExpr(TableSetExpr*) override;
+  Result OnTableGrowExpr(TableGrowExpr*) override;
+  Result OnTableSizeExpr(TableSizeExpr*) override;
+  Result OnTableFillExpr(TableFillExpr*) override;
+  Result OnRefFuncExpr(RefFuncExpr*) override;
+  Result OnRefNullExpr(RefNullExpr*) override;
+  Result OnRefIsNullExpr(RefIsNullExpr*) override;
+  Result OnNopExpr(NopExpr*) override;
+  Result OnReturnExpr(ReturnExpr*) override;
+  Result OnReturnCallExpr(ReturnCallExpr*) override;
+  Result OnReturnCallIndirectExpr(ReturnCallIndirectExpr*) override;
+  Result OnSelectExpr(SelectExpr*) override;
+  Result OnStoreExpr(StoreExpr*) override;
+  Result OnUnaryExpr(UnaryExpr*) override;
+  Result OnUnreachableExpr(UnreachableExpr*) override;
+  Result BeginTryExpr(TryExpr*) override;
+  Result OnCatchExpr(TryExpr*) override;
+  Result EndTryExpr(TryExpr*) override;
+  Result OnThrowExpr(ThrowExpr*) override;
+  Result OnRethrowExpr(RethrowExpr*) override;
+  Result OnAtomicWaitExpr(AtomicWaitExpr*) override;
+  Result OnAtomicFenceExpr(AtomicFenceExpr*) override;
+  Result OnAtomicNotifyExpr(AtomicNotifyExpr*) override;
+  Result OnAtomicLoadExpr(AtomicLoadExpr*) override;
+  Result OnAtomicStoreExpr(AtomicStoreExpr*) override;
+  Result OnAtomicRmwExpr(AtomicRmwExpr*) override;
+  Result OnAtomicRmwCmpxchgExpr(AtomicRmwCmpxchgExpr*) override;
+  Result OnTernaryExpr(TernaryExpr*) override;
+  Result OnSimdLaneOpExpr(SimdLaneOpExpr*) override;
+  Result OnSimdShuffleOpExpr(SimdShuffleOpExpr*) override;
+  Result OnLoadSplatExpr(LoadSplatExpr*) override;
+
+ private:
+  Type GetDeclarationType(const FuncDeclaration&);
+  Var GetFuncTypeIndex(const Location&, const FuncDeclaration&);
+
+  const ValidateOptions& options_;
+  Errors* errors_ = nullptr;
+  SharedValidator validator_;
+  const Module* current_module_ = nullptr;
+  Result result_ = Result::Ok;
 };
 
-static void WABT_PRINTF_FORMAT(3, 4)
-    print_error(Context* ctx, const Location* loc, const char* fmt, ...) {
-  ctx->result = Result::Error;
-  va_list args;
-  va_start(args, fmt);
-  ast_format_error(ctx->error_handler, loc, ctx->lexer, fmt, args);
-  va_end(args);
+ScriptValidator::ScriptValidator(Errors* errors,
+                                 const Script* script,
+                                 const ValidateOptions& options)
+    : options_(options), errors_(errors), script_(script) {}
+
+void ScriptValidator::PrintError(const Location* loc, const char* format, ...) {
+  result_ = Result::Error;
+  WABT_SNPRINTF_ALLOCA(buffer, length, format);
+  errors_->emplace_back(ErrorLevel::Error, *loc, buffer);
 }
 
-static void on_typechecker_error(const char* msg, void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  print_error(ctx, ctx->expr_loc, "%s", msg);
-}
-
-static bool is_power_of_two(uint32_t x) {
-  return x && ((x & (x - 1)) == 0);
-}
-
-static uint32_t get_opcode_natural_alignment(Opcode opcode) {
-  uint32_t memory_size = get_opcode_memory_size(opcode);
-  assert(memory_size != 0);
-  return memory_size;
-}
-
-static Result check_var(Context* ctx,
-                        int max_index,
-                        const Var* var,
-                        const char* desc,
-                        int* out_index) {
-  assert(var->type == VarType::Index);
-  if (var->index >= 0 && var->index < max_index) {
-    if (out_index)
-      *out_index = var->index;
-    return Result::Ok;
+void ScriptValidator::CheckTypeIndex(const Location* loc,
+                                     Type actual,
+                                     Type expected,
+                                     const char* desc,
+                                     Index index,
+                                     const char* index_kind) {
+  if (Failed(TypeChecker::CheckType(actual, expected))) {
+    PrintError(loc,
+               "type mismatch for %s %" PRIindex " of %s. got %s, expected %s",
+               index_kind, index, desc, actual.GetName(), expected.GetName());
   }
-  print_error(ctx, &var->loc, "%s variable out of range (max %d)", desc,
-              max_index);
-  return Result::Error;
 }
 
-static Result check_func_var(Context* ctx,
-                             const Var* var,
-                             const Func** out_func) {
-  int index;
-  if (WABT_FAILED(check_var(ctx, ctx->current_module->funcs.size, var,
-                            "function", &index))) {
-    return Result::Error;
+void ScriptValidator::CheckResultTypes(const Location* loc,
+                                       const TypeVector& actual,
+                                       const TypeVector& expected,
+                                       const char* desc) {
+  if (actual.size() == expected.size()) {
+    for (size_t i = 0; i < actual.size(); ++i) {
+      CheckTypeIndex(loc, actual[i], expected[i], desc, i, "result");
+    }
+  } else {
+    PrintError(loc, "expected %" PRIzd " results, got %" PRIzd, expected.size(),
+               actual.size());
   }
+}
 
-  if (out_func)
-    *out_func = ctx->current_module->funcs.data[index];
+Type Validator::GetDeclarationType(const FuncDeclaration& decl) {
+  if (decl.has_func_type) {
+    return Type(decl.type_var.index());
+  }
+  if (decl.sig.param_types.empty()) {
+    if (decl.sig.result_types.empty()) {
+      return Type::Void;
+    }
+    if (decl.sig.result_types.size() == 1) {
+      return decl.sig.result_types[0];
+    }
+  }
+  return Type(current_module_->GetFuncTypeIndex(decl));
+}
+
+Var Validator::GetFuncTypeIndex(const Location& default_loc,
+                                const FuncDeclaration& decl) {
+  if (decl.has_func_type) {
+    return decl.type_var;
+  }
+  return Var(current_module_->GetFuncTypeIndex(decl), default_loc);
+}
+
+Result Validator::OnBinaryExpr(BinaryExpr* expr) {
+  result_ |= validator_.OnBinary(expr->loc, expr->opcode);
   return Result::Ok;
 }
 
-static Result check_global_var(Context* ctx,
-                               const Var* var,
-                               const Global** out_global,
-                               int* out_global_index) {
-  int index;
-  if (WABT_FAILED(check_var(ctx, ctx->current_module->globals.size, var,
-                            "global", &index))) {
-    return Result::Error;
-  }
-
-  if (out_global)
-    *out_global = ctx->current_module->globals.data[index];
-  if (out_global_index)
-    *out_global_index = index;
+Result Validator::BeginBlockExpr(BlockExpr* expr) {
+  result_ |=
+      validator_.OnBlock(expr->loc, GetDeclarationType(expr->block.decl));
   return Result::Ok;
 }
 
-static Type get_global_var_type_or_any(Context* ctx, const Var* var) {
-  const Global* global;
-  if (WABT_SUCCEEDED(check_global_var(ctx, var, &global, nullptr)))
-    return global->type;
-  return Type::Any;
-}
-
-static Result check_func_type_var(Context* ctx,
-                                  const Var* var,
-                                  const FuncType** out_func_type) {
-  int index;
-  if (WABT_FAILED(check_var(ctx, ctx->current_module->func_types.size, var,
-                            "function type", &index))) {
-    return Result::Error;
-  }
-
-  if (out_func_type)
-    *out_func_type = ctx->current_module->func_types.data[index];
+Result Validator::EndBlockExpr(BlockExpr* expr) {
+  result_ |= validator_.OnEnd(expr->block.end_loc);
   return Result::Ok;
 }
 
-static Result check_table_var(Context* ctx,
-                              const Var* var,
-                              const Table** out_table) {
-  int index;
-  if (WABT_FAILED(check_var(ctx, ctx->current_module->tables.size, var, "table",
-                            &index))) {
-    return Result::Error;
-  }
-
-  if (out_table)
-    *out_table = ctx->current_module->tables.data[index];
+Result Validator::OnBrExpr(BrExpr* expr) {
+  result_ |= validator_.OnBr(expr->loc, expr->var);
   return Result::Ok;
 }
 
-static Result check_memory_var(Context* ctx,
-                               const Var* var,
-                               const Memory** out_memory) {
-  int index;
-  if (WABT_FAILED(check_var(ctx, ctx->current_module->memories.size, var,
-                            "memory", &index))) {
-    return Result::Error;
-  }
-
-  if (out_memory)
-    *out_memory = ctx->current_module->memories.data[index];
+Result Validator::OnBrIfExpr(BrIfExpr* expr) {
+  result_ |= validator_.OnBrIf(expr->loc, expr->var);
   return Result::Ok;
 }
 
-static Result check_local_var(Context* ctx, const Var* var, Type* out_type) {
-  const Func* func = ctx->current_func;
-  int max_index = get_num_params_and_locals(func);
-  int index = get_local_index_by_var(func, var);
-  if (index >= 0 && index < max_index) {
-    if (out_type) {
-      int num_params = get_num_params(func);
-      if (index < num_params) {
-        *out_type = get_param_type(func, index);
+Result Validator::OnBrOnExnExpr(BrOnExnExpr* expr) {
+  result_ |= validator_.OnBrOnExn(expr->loc, expr->label_var,
+                                  expr->event_var);
+  return Result::Ok;
+}
+
+Result Validator::OnBrTableExpr(BrTableExpr* expr) {
+  result_ |= validator_.BeginBrTable(expr->loc);
+  for (const Var& var : expr->targets) {
+    result_ |= validator_.OnBrTableTarget(expr->loc, var);
+  }
+  result_ |= validator_.OnBrTableTarget(expr->loc, expr->default_target);
+  result_ |= validator_.EndBrTable(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnCallExpr(CallExpr* expr) {
+  result_ |= validator_.OnCall(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnCallIndirectExpr(CallIndirectExpr* expr) {
+  result_ |= validator_.OnCallIndirect(
+      expr->loc, GetFuncTypeIndex(expr->loc, expr->decl), expr->table);
+  return Result::Ok;
+}
+
+Result Validator::OnCompareExpr(CompareExpr* expr) {
+  result_ |= validator_.OnCompare(expr->loc, expr->opcode);
+  return Result::Ok;
+}
+
+Result Validator::OnConstExpr(ConstExpr* expr) {
+  result_ |= validator_.OnConst(expr->loc, expr->const_.type());
+  return Result::Ok;
+}
+
+Result Validator::OnConvertExpr(ConvertExpr* expr) {
+  result_ |= validator_.OnConvert(expr->loc, expr->opcode);
+  return Result::Ok;
+}
+
+Result Validator::OnDropExpr(DropExpr* expr) {
+  result_ |= validator_.OnDrop(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnGlobalGetExpr(GlobalGetExpr* expr) {
+  result_ |= validator_.OnGlobalGet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnGlobalSetExpr(GlobalSetExpr* expr) {
+  result_ |= validator_.OnGlobalSet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::BeginIfExpr(IfExpr* expr) {
+  result_ |= validator_.OnIf(expr->loc, GetDeclarationType(expr->true_.decl));
+  return Result::Ok;
+}
+
+Result Validator::AfterIfTrueExpr(IfExpr* expr) {
+  if (!expr->false_.empty()) {
+    result_ |= validator_.OnElse(expr->true_.end_loc);
+  }
+  return Result::Ok;
+}
+
+Result Validator::EndIfExpr(IfExpr* expr) {
+  result_ |= validator_.OnEnd(expr->false_.empty() ? expr->true_.end_loc
+                                                   : expr->false_end_loc);
+  return Result::Ok;
+}
+
+Result Validator::OnLoadExpr(LoadExpr* expr) {
+  result_ |= validator_.OnLoad(expr->loc, expr->opcode,
+                               expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnLocalGetExpr(LocalGetExpr* expr) {
+  result_ |= validator_.OnLocalGet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnLocalSetExpr(LocalSetExpr* expr) {
+  result_ |= validator_.OnLocalSet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnLocalTeeExpr(LocalTeeExpr* expr) {
+  result_ |= validator_.OnLocalTee(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::BeginLoopExpr(LoopExpr* expr) {
+  result_ |= validator_.OnLoop(expr->loc, GetDeclarationType(expr->block.decl));
+  return Result::Ok;
+}
+
+Result Validator::EndLoopExpr(LoopExpr* expr) {
+  result_ |= validator_.OnEnd(expr->block.end_loc);
+  return Result::Ok;
+}
+
+Result Validator::OnMemoryCopyExpr(MemoryCopyExpr* expr) {
+  result_ |= validator_.OnMemoryCopy(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnDataDropExpr(DataDropExpr* expr) {
+  result_ |= validator_.OnDataDrop(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnMemoryFillExpr(MemoryFillExpr* expr) {
+  result_ |= validator_.OnMemoryFill(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnMemoryGrowExpr(MemoryGrowExpr* expr) {
+  result_ |= validator_.OnMemoryGrow(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnMemoryInitExpr(MemoryInitExpr* expr) {
+  result_ |= validator_.OnMemoryInit(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnMemorySizeExpr(MemorySizeExpr* expr) {
+  result_ |= validator_.OnMemorySize(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnTableCopyExpr(TableCopyExpr* expr) {
+  result_ |=
+      validator_.OnTableCopy(expr->loc, expr->dst_table, expr->src_table);
+  return Result::Ok;
+}
+
+Result Validator::OnElemDropExpr(ElemDropExpr* expr) {
+  result_ |= validator_.OnElemDrop(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnTableInitExpr(TableInitExpr* expr) {
+  result_ |=
+      validator_.OnTableInit(expr->loc, expr->segment_index, expr->table_index);
+  return Result::Ok;
+}
+
+Result Validator::OnTableGetExpr(TableGetExpr* expr) {
+  result_ |= validator_.OnTableGet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnTableSetExpr(TableSetExpr* expr) {
+  result_ |= validator_.OnTableSet(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnTableGrowExpr(TableGrowExpr* expr) {
+  result_ |= validator_.OnTableGrow(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnTableSizeExpr(TableSizeExpr* expr) {
+  result_ |= validator_.OnTableSize(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnTableFillExpr(TableFillExpr* expr) {
+  result_ |= validator_.OnTableFill(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnRefFuncExpr(RefFuncExpr* expr) {
+  result_ |= validator_.OnRefFunc(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnRefNullExpr(RefNullExpr* expr) {
+  result_ |= validator_.OnRefNull(expr->loc, expr->type);
+  return Result::Ok;
+}
+
+Result Validator::OnRefIsNullExpr(RefIsNullExpr* expr) {
+  result_ |= validator_.OnRefIsNull(expr->loc, expr->type);
+  return Result::Ok;
+}
+
+Result Validator::OnNopExpr(NopExpr* expr) {
+  result_ |= validator_.OnNop(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnReturnExpr(ReturnExpr* expr) {
+  result_ |= validator_.OnReturn(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnReturnCallExpr(ReturnCallExpr* expr) {
+  result_ |= validator_.OnReturnCall(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnReturnCallIndirectExpr(ReturnCallIndirectExpr* expr) {
+  result_ |= validator_.OnReturnCallIndirect(
+      expr->loc, GetFuncTypeIndex(expr->loc, expr->decl), expr->table);
+  return Result::Ok;
+}
+
+Result Validator::OnSelectExpr(SelectExpr* expr) {
+  Type result_type;
+  if (expr->result_type.empty()) {
+    result_type = Type::Void;
+  } else {
+    result_type = expr->result_type[0];
+  }
+  result_ |= validator_.OnSelect(expr->loc, result_type);
+  // TODO: Existing behavior fails when select fails.
+#if 0
+  return Result::Ok;
+#else
+  return result_;
+#endif
+}
+
+Result Validator::OnStoreExpr(StoreExpr* expr) {
+  result_ |= validator_.OnStore(expr->loc, expr->opcode,
+                                expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnUnaryExpr(UnaryExpr* expr) {
+  result_ |= validator_.OnUnary(expr->loc, expr->opcode);
+  return Result::Ok;
+}
+
+Result Validator::OnUnreachableExpr(UnreachableExpr* expr) {
+  result_ |= validator_.OnUnreachable(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::BeginTryExpr(TryExpr* expr) {
+  result_ |= validator_.OnTry(expr->loc, GetDeclarationType(expr->block.decl));
+  return Result::Ok;
+}
+
+Result Validator::OnCatchExpr(TryExpr* expr) {
+  result_ |= validator_.OnCatch(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::EndTryExpr(TryExpr* expr) {
+  result_ |= validator_.OnEnd(expr->block.end_loc);
+  return Result::Ok;
+}
+
+Result Validator::OnThrowExpr(ThrowExpr* expr) {
+  result_ |= validator_.OnThrow(expr->loc, expr->var);
+  return Result::Ok;
+}
+
+Result Validator::OnRethrowExpr(RethrowExpr* expr) {
+  result_ |= validator_.OnRethrow(expr->loc);
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicWaitExpr(AtomicWaitExpr* expr) {
+  result_ |= validator_.OnAtomicWait(expr->loc, expr->opcode,
+                                     expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicFenceExpr(AtomicFenceExpr* expr) {
+  result_ |= validator_.OnAtomicFence(expr->loc, expr->consistency_model);
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicNotifyExpr(AtomicNotifyExpr* expr) {
+  result_ |= validator_.OnAtomicNotify(expr->loc, expr->opcode,
+                                       expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicLoadExpr(AtomicLoadExpr* expr) {
+  result_ |= validator_.OnAtomicLoad(expr->loc, expr->opcode,
+                                     expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicStoreExpr(AtomicStoreExpr* expr) {
+  result_ |= validator_.OnAtomicStore(expr->loc, expr->opcode,
+                                      expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicRmwExpr(AtomicRmwExpr* expr) {
+  result_ |= validator_.OnAtomicRmw(expr->loc, expr->opcode,
+                                    expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnAtomicRmwCmpxchgExpr(AtomicRmwCmpxchgExpr* expr) {
+  result_ |= validator_.OnAtomicRmwCmpxchg(
+      expr->loc, expr->opcode, expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Result Validator::OnTernaryExpr(TernaryExpr* expr) {
+  result_ |= validator_.OnTernary(expr->loc, expr->opcode);
+  return Result::Ok;
+}
+
+Result Validator::OnSimdLaneOpExpr(SimdLaneOpExpr* expr) {
+  result_ |= validator_.OnSimdLaneOp(expr->loc, expr->opcode, expr->val);
+  return Result::Ok;
+}
+
+Result Validator::OnSimdShuffleOpExpr(SimdShuffleOpExpr* expr) {
+  result_ |= validator_.OnSimdShuffleOp(expr->loc, expr->opcode, expr->val);
+  return Result::Ok;
+}
+
+Result Validator::OnLoadSplatExpr(LoadSplatExpr* expr) {
+  result_ |= validator_.OnLoadSplat(expr->loc, expr->opcode,
+                                    expr->opcode.GetAlignment(expr->align));
+  return Result::Ok;
+}
+
+Validator::Validator(Errors* errors,
+                     const Module* module,
+                     const ValidateOptions& options)
+    : options_(options),
+      errors_(errors),
+      validator_(errors_, options_),
+      current_module_(module) {}
+
+Result Validator::CheckModule() {
+  const Module* module = current_module_;
+
+  // Type section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<TypeModuleField>(&field)) {
+      switch (f->type->kind()) {
+        case TypeEntryKind::Func: {
+          FuncType* func_type = cast<FuncType>(f->type.get());
+          result_ |= validator_.OnFuncType(field.loc,
+                                           func_type->sig.param_types.size(),
+                                           func_type->sig.param_types.data(),
+                                           func_type->sig.result_types.size(),
+                                           func_type->sig.result_types.data());
+          break;
+        }
+
+        case TypeEntryKind::Struct: {
+          StructType* struct_type = cast<StructType>(f->type.get());
+          TypeMutVector type_muts;
+          for (auto&& field : struct_type->fields) {
+            type_muts.push_back(TypeMut{field.type, field.mutable_});
+          }
+          result_ |= validator_.OnStructType(field.loc, type_muts.size(),
+                                             type_muts.data());
+          break;
+        }
+
+        case TypeEntryKind::Array: {
+          ArrayType* array_type = cast<ArrayType>(f->type.get());
+          result_ |= validator_.OnArrayType(
+              field.loc,
+              TypeMut{array_type->field.type, array_type->field.mutable_});
+          break;
+        }
+      }
+    }
+  }
+
+  // Import section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<ImportModuleField>(&field)) {
+      switch (f->import->kind()) {
+        case ExternalKind::Func: {
+          auto&& func = cast<FuncImport>(f->import.get())->func;
+          result_ |= validator_.OnFunction(
+              field.loc, GetFuncTypeIndex(field.loc, func.decl));
+          break;
+        }
+
+        case ExternalKind::Table: {
+          auto&& table = cast<TableImport>(f->import.get())->table;
+          result_ |=
+              validator_.OnTable(field.loc, table.elem_type, table.elem_limits);
+          break;
+        }
+
+        case ExternalKind::Memory: {
+          auto&& memory = cast<MemoryImport>(f->import.get())->memory;
+          result_ |= validator_.OnMemory(field.loc, memory.page_limits);
+          break;
+        }
+
+        case ExternalKind::Global: {
+          auto&& global = cast<GlobalImport>(f->import.get())->global;
+          result_ |= validator_.OnGlobalImport(field.loc, global.type,
+                                               global.mutable_);
+          break;
+        }
+
+        case ExternalKind::Event: {
+          auto&& event = cast<EventImport>(f->import.get())->event;
+          result_ |= validator_.OnEvent(
+              field.loc, GetFuncTypeIndex(field.loc, event.decl));
+          break;
+        }
+      }
+    }
+  }
+
+  // Func section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<FuncModuleField>(&field)) {
+      result_ |= validator_.OnFunction(
+          field.loc, GetFuncTypeIndex(field.loc, f->func.decl));
+    }
+  }
+
+  // Table section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<TableModuleField>(&field)) {
+      result_ |= validator_.OnTable(field.loc, f->table.elem_type,
+                                    f->table.elem_limits);
+    }
+  }
+
+  // Memory section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<MemoryModuleField>(&field)) {
+      result_ |= validator_.OnMemory(field.loc, f->memory.page_limits);
+    }
+  }
+
+  // Global section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<GlobalModuleField>(&field)) {
+      result_ |=
+          validator_.OnGlobal(field.loc, f->global.type, f->global.mutable_);
+
+      if (f->global.init_expr.size() == 1) {
+        const Expr* expr = &f->global.init_expr.front();
+
+        switch (expr->type()) {
+          case ExprType::Const:
+            result_ |= validator_.OnGlobalInitExpr_Const(
+                expr->loc, cast<ConstExpr>(expr)->const_.type());
+            break;
+
+          case ExprType::GlobalGet: {
+            Var var = cast<GlobalGetExpr>(expr)->var;
+            result_ |= validator_.OnGlobalInitExpr_GlobalGet(expr->loc, var);
+            break;
+          }
+
+          case ExprType::RefFunc:
+            result_ |= validator_.OnGlobalInitExpr_RefFunc(
+                expr->loc, cast<RefFuncExpr>(expr)->var);
+            break;
+
+          case ExprType::RefNull:
+            result_ |= validator_.OnGlobalInitExpr_RefNull(
+                expr->loc, cast<RefNullExpr>(expr)->type);
+            break;
+
+          default:
+            result_ |= validator_.OnGlobalInitExpr_Other(field.loc);
+            break;
+        }
       } else {
-        *out_type = ctx->current_func->local_types.data[index - num_params];
+        result_ |= validator_.OnGlobalInitExpr_Other(field.loc);
       }
     }
-    return Result::Ok;
   }
 
-  if (var->type == VarType::Name) {
-    print_error(ctx, &var->loc,
-                "undefined local variable \"" PRIstringslice "\"",
-                WABT_PRINTF_STRING_SLICE_ARG(var->name));
-  } else {
-    print_error(ctx, &var->loc, "local variable out of range (max %d)",
-                max_index);
-  }
-  return Result::Error;
-}
-
-static Type get_local_var_type_or_any(Context* ctx, const Var* var) {
-  Type type = Type::Any;
-  check_local_var(ctx, var, &type);
-  return type;
-}
-
-static void check_align(Context* ctx,
-                        const Location* loc,
-                        uint32_t alignment,
-                        uint32_t natural_alignment) {
-  if (alignment != WABT_USE_NATURAL_ALIGNMENT) {
-    if (!is_power_of_two(alignment))
-      print_error(ctx, loc, "alignment must be power-of-two");
-    if (alignment > natural_alignment) {
-      print_error(ctx, loc,
-                  "alignment must not be larger than natural alignment (%u)",
-                  natural_alignment);
-    }
-  }
-}
-
-static void check_offset(Context* ctx, const Location* loc, uint64_t offset) {
-  if (offset > UINT32_MAX) {
-    print_error(ctx, loc, "offset must be less than or equal to 0xffffffff");
-  }
-}
-
-static void check_type(Context* ctx,
-                       const Location* loc,
-                       Type actual,
-                       Type expected,
-                       const char* desc) {
-  if (expected != actual) {
-    print_error(ctx, loc, "type mismatch at %s. got %s, expected %s", desc,
-                get_type_name(actual), get_type_name(expected));
-  }
-}
-
-static void check_type_index(Context* ctx,
-                             const Location* loc,
-                             Type actual,
-                             Type expected,
-                             const char* desc,
-                             int index,
-                             const char* index_kind) {
-  if (expected != actual && expected != Type::Any && actual != Type::Any) {
-    print_error(ctx, loc, "type mismatch for %s %d of %s. got %s, expected %s",
-                index_kind, index, desc, get_type_name(actual),
-                get_type_name(expected));
-  }
-}
-
-static void check_types(Context* ctx,
-                        const Location* loc,
-                        const TypeVector* actual,
-                        const TypeVector* expected,
-                        const char* desc,
-                        const char* index_kind) {
-  if (actual->size == expected->size) {
-    size_t i;
-    for (i = 0; i < actual->size; ++i) {
-      check_type_index(ctx, loc, actual->data[i], expected->data[i], desc, i,
-                       index_kind);
-    }
-  } else {
-    print_error(ctx, loc, "expected %" PRIzd " %ss, got %" PRIzd,
-                expected->size, index_kind, actual->size);
-  }
-}
-
-static void check_const_types(Context* ctx,
-                              const Location* loc,
-                              const TypeVector* actual,
-                              const ConstVector* expected,
-                              const char* desc) {
-  if (actual->size == expected->size) {
-    size_t i;
-    for (i = 0; i < actual->size; ++i) {
-      check_type_index(ctx, loc, actual->data[i], expected->data[i].type, desc,
-                       i, "result");
-    }
-  } else {
-    print_error(ctx, loc, "expected %" PRIzd " results, got %" PRIzd,
-                expected->size, actual->size);
-  }
-}
-
-static void check_const_type(Context* ctx,
-                             const Location* loc,
-                             Type actual,
-                             const ConstVector* expected,
-                             const char* desc) {
-  TypeVector actual_types;
-  WABT_ZERO_MEMORY(actual_types);
-  actual_types.size = actual == Type::Void ? 0 : 1;
-  actual_types.data = &actual;
-  check_const_types(ctx, loc, &actual_types, expected, desc);
-}
-
-static void check_assert_return_nan_type(Context* ctx,
-                                         const Location* loc,
-                                         Type actual,
-                                         const char* desc) {
-  /* when using assert_return_nan, the result can be either a f32 or f64 type
-   * so we special case it here. */
-  if (actual != Type::F32 && actual != Type::F64) {
-    print_error(ctx, loc, "type mismatch at %s. got %s, expected f32 or f64",
-                desc, get_type_name(actual));
-  }
-}
-
-static void check_expr(Context* ctx, const Expr* expr);
-
-static void check_expr_list(Context* ctx,
-                            const Location* loc,
-                            const Expr* first) {
-  if (first) {
-    const Expr* expr;
-    for (expr = first; expr; expr = expr->next)
-      check_expr(ctx, expr);
-  }
-}
-
-static void check_has_memory(Context* ctx, const Location* loc, Opcode opcode) {
-  if (ctx->current_module->memories.size == 0) {
-    print_error(ctx, loc, "%s requires an imported or defined memory.",
-                get_opcode_name(opcode));
-  }
-}
-
-static void check_expr(Context* ctx, const Expr* expr) {
-  ctx->expr_loc = &expr->loc;
-
-  switch (expr->type) {
-    case ExprType::Binary:
-      typechecker_on_binary(&ctx->typechecker, expr->binary.opcode);
-      break;
-
-    case ExprType::Block:
-      typechecker_on_block(&ctx->typechecker, &expr->block.sig);
-      check_expr_list(ctx, &expr->loc, expr->block.first);
-      typechecker_on_end(&ctx->typechecker);
-      break;
-
-    case ExprType::Br:
-      typechecker_on_br(&ctx->typechecker, expr->br.var.index);
-      break;
-
-    case ExprType::BrIf:
-      typechecker_on_br_if(&ctx->typechecker, expr->br_if.var.index);
-      break;
-
-    case ExprType::BrTable: {
-      typechecker_begin_br_table(&ctx->typechecker);
-      size_t i;
-      for (i = 0; i < expr->br_table.targets.size; ++i) {
-        typechecker_on_br_table_target(&ctx->typechecker,
-                                       expr->br_table.targets.data[i].index);
-      }
-      typechecker_on_br_table_target(&ctx->typechecker,
-                                     expr->br_table.default_target.index);
-      typechecker_end_br_table(&ctx->typechecker);
-      break;
-    }
-
-    case ExprType::Call: {
-      const Func* callee;
-      if (WABT_SUCCEEDED(check_func_var(ctx, &expr->call.var, &callee))) {
-        typechecker_on_call(&ctx->typechecker, &callee->decl.sig.param_types,
-                            &callee->decl.sig.result_types);
-      }
-      break;
-    }
-
-    case ExprType::CallIndirect: {
-      const FuncType* func_type;
-      if (ctx->current_module->tables.size == 0) {
-        print_error(ctx, &expr->loc,
-                    "found call_indirect operator, but no table");
-      }
-      if (WABT_SUCCEEDED(
-              check_func_type_var(ctx, &expr->call_indirect.var, &func_type))) {
-        typechecker_on_call_indirect(&ctx->typechecker,
-                                     &func_type->sig.param_types,
-                                     &func_type->sig.result_types);
-      }
-      break;
-    }
-
-    case ExprType::Compare:
-      typechecker_on_compare(&ctx->typechecker, expr->compare.opcode);
-      break;
-
-    case ExprType::Const:
-      typechecker_on_const(&ctx->typechecker, expr->const_.type);
-      break;
-
-    case ExprType::Convert:
-      typechecker_on_convert(&ctx->typechecker, expr->convert.opcode);
-      break;
-
-    case ExprType::Drop:
-      typechecker_on_drop(&ctx->typechecker);
-      break;
-
-    case ExprType::GetGlobal:
-      typechecker_on_get_global(
-          &ctx->typechecker,
-          get_global_var_type_or_any(ctx, &expr->get_global.var));
-      break;
-
-    case ExprType::GetLocal:
-      typechecker_on_get_local(
-          &ctx->typechecker,
-          get_local_var_type_or_any(ctx, &expr->get_local.var));
-      break;
-
-    case ExprType::GrowMemory:
-      check_has_memory(ctx, &expr->loc, Opcode::GrowMemory);
-      typechecker_on_grow_memory(&ctx->typechecker);
-      break;
-
-    case ExprType::If:
-      typechecker_on_if(&ctx->typechecker, &expr->if_.true_.sig);
-      check_expr_list(ctx, &expr->loc, expr->if_.true_.first);
-      if (expr->if_.false_) {
-        typechecker_on_else(&ctx->typechecker);
-        check_expr_list(ctx, &expr->loc, expr->if_.false_);
-      }
-      typechecker_on_end(&ctx->typechecker);
-      break;
-
-    case ExprType::Load:
-      check_has_memory(ctx, &expr->loc, expr->load.opcode);
-      check_align(ctx, &expr->loc, expr->load.align,
-                  get_opcode_natural_alignment(expr->load.opcode));
-      check_offset(ctx, &expr->loc, expr->load.offset);
-      typechecker_on_load(&ctx->typechecker, expr->load.opcode);
-      break;
-
-    case ExprType::Loop:
-      typechecker_on_loop(&ctx->typechecker, &expr->loop.sig);
-      check_expr_list(ctx, &expr->loc, expr->loop.first);
-      typechecker_on_end(&ctx->typechecker);
-      break;
-
-    case ExprType::CurrentMemory:
-      check_has_memory(ctx, &expr->loc, Opcode::CurrentMemory);
-      typechecker_on_current_memory(&ctx->typechecker);
-      break;
-
-    case ExprType::Nop:
-      break;
-
-    case ExprType::Return:
-      typechecker_on_return(&ctx->typechecker);
-      break;
-
-    case ExprType::Select:
-      typechecker_on_select(&ctx->typechecker);
-      break;
-
-    case ExprType::SetGlobal:
-      typechecker_on_set_global(
-          &ctx->typechecker,
-          get_global_var_type_or_any(ctx, &expr->set_global.var));
-      break;
-
-    case ExprType::SetLocal:
-      typechecker_on_set_local(
-          &ctx->typechecker,
-          get_local_var_type_or_any(ctx, &expr->set_local.var));
-      break;
-
-    case ExprType::Store:
-      check_has_memory(ctx, &expr->loc, expr->store.opcode);
-      check_align(ctx, &expr->loc, expr->store.align,
-                  get_opcode_natural_alignment(expr->store.opcode));
-      check_offset(ctx, &expr->loc, expr->store.offset);
-      typechecker_on_store(&ctx->typechecker, expr->store.opcode);
-      break;
-
-    case ExprType::TeeLocal:
-      typechecker_on_tee_local(
-          &ctx->typechecker,
-          get_local_var_type_or_any(ctx, &expr->tee_local.var));
-      break;
-
-    case ExprType::Unary:
-      typechecker_on_unary(&ctx->typechecker, expr->unary.opcode);
-      break;
-
-    case ExprType::Unreachable:
-      typechecker_on_unreachable(&ctx->typechecker);
-      break;
-  }
-}
-
-static void check_func_signature_matches_func_type(Context* ctx,
-                                                   const Location* loc,
-                                                   const FuncSignature* sig,
-                                                   const FuncType* func_type) {
-  check_types(ctx, loc, &sig->result_types, &func_type->sig.result_types,
-              "function", "result");
-  check_types(ctx, loc, &sig->param_types, &func_type->sig.param_types,
-              "function", "argument");
-}
-
-static void check_func(Context* ctx, const Location* loc, const Func* func) {
-  ctx->current_func = func;
-  if (get_num_results(func) > 1) {
-    print_error(ctx, loc, "multiple result values not currently supported.");
-    /* don't run any other checks, the won't test the result_type properly */
-    return;
-  }
-  if (decl_has_func_type(&func->decl)) {
-    const FuncType* func_type;
-    if (WABT_SUCCEEDED(
-            check_func_type_var(ctx, &func->decl.type_var, &func_type))) {
-      check_func_signature_matches_func_type(ctx, loc, &func->decl.sig,
-                                             func_type);
+  // Event section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<EventModuleField>(&field)) {
+      result_ |= validator_.OnEvent(field.loc,
+                                    GetFuncTypeIndex(field.loc, f->event.decl));
     }
   }
 
-  ctx->expr_loc = loc;
-  typechecker_begin_function(&ctx->typechecker, &func->decl.sig.result_types);
-  check_expr_list(ctx, loc, func->first_expr);
-  typechecker_end_function(&ctx->typechecker);
-  ctx->current_func = nullptr;
-}
-
-static void print_const_expr_error(Context* ctx,
-                                   const Location* loc,
-                                   const char* desc) {
-  print_error(ctx, loc,
-              "invalid %s, must be a constant expression; either *.const or "
-              "get_global.",
-              desc);
-}
-
-static void check_const_init_expr(Context* ctx,
-                                  const Location* loc,
-                                  const Expr* expr,
-                                  Type expected_type,
-                                  const char* desc) {
-  Type type = Type::Void;
-  if (expr) {
-    if (expr->next) {
-      print_const_expr_error(ctx, loc, desc);
-      return;
-    }
-
-    switch (expr->type) {
-      case ExprType::Const:
-        type = expr->const_.type;
-        break;
-
-      case ExprType::GetGlobal: {
-        const Global* ref_global = nullptr;
-        int ref_global_index;
-        if (WABT_FAILED(check_global_var(ctx, &expr->get_global.var,
-                                         &ref_global, &ref_global_index))) {
-          return;
-        }
-
-        type = ref_global->type;
-        /* globals can only reference previously defined, internal globals */
-        if (ref_global_index >= ctx->current_global_index) {
-          print_error(ctx, loc,
-                      "initializer expression can only reference a previously "
-                      "defined global");
-        } else if (ref_global_index >= ctx->num_imported_globals) {
-          print_error(
-              ctx, loc,
-              "initializer expression can only reference an imported global");
-        }
-
-        if (ref_global->mutable_) {
-          print_error(
-              ctx, loc,
-              "initializer expression cannot reference a mutable global");
-        }
-        break;
-      }
-
-      default:
-        print_const_expr_error(ctx, loc, desc);
-        return;
+  // Export section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<ExportModuleField>(&field)) {
+      result_ |= validator_.OnExport(field.loc, f->export_.kind, f->export_.var,
+                                     f->export_.name);
     }
   }
 
-  check_type(ctx, expr ? &expr->loc : loc, type, expected_type, desc);
-}
-
-static void check_global(Context* ctx,
-                         const Location* loc,
-                         const Global* global) {
-  check_const_init_expr(ctx, loc, global->init_expr, global->type,
-                        "global initializer expression");
-}
-
-static void check_limits(Context* ctx,
-                         const Location* loc,
-                         const Limits* limits,
-                         uint64_t absolute_max,
-                         const char* desc) {
-  if (limits->initial > absolute_max) {
-    print_error(ctx, loc, "initial %s (%" PRIu64 ") must be <= (%" PRIu64 ")",
-                desc, limits->initial, absolute_max);
-  }
-
-  if (limits->has_max) {
-    if (limits->max > absolute_max) {
-      print_error(ctx, loc, "max %s (%" PRIu64 ") must be <= (%" PRIu64 ")",
-                  desc, limits->max, absolute_max);
-    }
-
-    if (limits->max < limits->initial) {
-      print_error(ctx, loc,
-                  "max %s (%" PRIu64 ") must be >= initial %s (%" PRIu64 ")",
-                  desc, limits->max, desc, limits->initial);
+  // Start section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<StartModuleField>(&field)) {
+      result_ |= validator_.OnStart(field.loc, f->start);
     }
   }
-}
 
-static void check_table(Context* ctx, const Location* loc, const Table* table) {
-  if (ctx->current_table_index == 1)
-    print_error(ctx, loc, "only one table allowed");
-  check_limits(ctx, loc, &table->elem_limits, UINT32_MAX, "elems");
-}
+  // Elem segment section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<ElemSegmentModuleField>(&field)) {
+      result_ |= validator_.OnElemSegment(field.loc, f->elem_segment.table_var,
+                                          f->elem_segment.kind);
 
-static void check_elem_segments(Context* ctx, const Module* module) {
-  ModuleField* field;
-  for (field = module->first_field; field; field = field->next) {
-    if (field->type != ModuleFieldType::ElemSegment)
-      continue;
+      validator_.OnElemSegmentElemType(f->elem_segment.elem_type);
 
-    ElemSegment* elem_segment = &field->elem_segment;
-    const Table* table;
-    if (!WABT_SUCCEEDED(check_table_var(ctx, &elem_segment->table_var, &table)))
-      continue;
+      // Init expr.
+      if (f->elem_segment.offset.size() == 1) {
+        const Expr* expr = &f->elem_segment.offset.front();
 
-    size_t i;
-    for (i = 0; i < elem_segment->vars.size; ++i) {
-      if (!WABT_SUCCEEDED(
-              check_func_var(ctx, &elem_segment->vars.data[i], nullptr)))
-        continue;
-    }
+        switch (expr->type()) {
+          case ExprType::Const:
+            result_ |= validator_.OnElemSegmentInitExpr_Const(
+                expr->loc, cast<ConstExpr>(expr)->const_.type());
+            break;
 
-    check_const_init_expr(ctx, &field->loc, elem_segment->offset, Type::I32,
-                          "elem segment offset");
-  }
-}
-
-static void check_memory(Context* ctx,
-                         const Location* loc,
-                         const Memory* memory) {
-  if (ctx->current_memory_index == 1)
-    print_error(ctx, loc, "only one memory block allowed");
-  check_limits(ctx, loc, &memory->page_limits, WABT_MAX_PAGES, "pages");
-}
-
-static void check_data_segments(Context* ctx, const Module* module) {
-  ModuleField* field;
-  for (field = module->first_field; field; field = field->next) {
-    if (field->type != ModuleFieldType::DataSegment)
-      continue;
-
-    DataSegment* data_segment = &field->data_segment;
-    const Memory* memory;
-    if (!WABT_SUCCEEDED(
-            check_memory_var(ctx, &data_segment->memory_var, &memory)))
-      continue;
-
-    check_const_init_expr(ctx, &field->loc, data_segment->offset, Type::I32,
-                          "data segment offset");
-  }
-}
-
-static void check_import(Context* ctx,
-                         const Location* loc,
-                         const Import* import) {
-  switch (import->kind) {
-    case ExternalKind::Func:
-      if (decl_has_func_type(&import->func.decl))
-        check_func_type_var(ctx, &import->func.decl.type_var, nullptr);
-      break;
-    case ExternalKind::Table:
-      check_table(ctx, loc, &import->table);
-      ctx->current_table_index++;
-      break;
-    case ExternalKind::Memory:
-      check_memory(ctx, loc, &import->memory);
-      ctx->current_memory_index++;
-      break;
-    case ExternalKind::Global:
-      if (import->global.mutable_) {
-        print_error(ctx, loc, "mutable globals cannot be imported");
-      }
-      ctx->num_imported_globals++;
-      ctx->current_global_index++;
-      break;
-  }
-}
-
-static void check_export(Context* ctx, const Export* export_) {
-  switch (export_->kind) {
-    case ExternalKind::Func:
-      check_func_var(ctx, &export_->var, nullptr);
-      break;
-    case ExternalKind::Table:
-      check_table_var(ctx, &export_->var, nullptr);
-      break;
-    case ExternalKind::Memory:
-      check_memory_var(ctx, &export_->var, nullptr);
-      break;
-    case ExternalKind::Global: {
-      const Global* global;
-      if (WABT_SUCCEEDED(
-              check_global_var(ctx, &export_->var, &global, nullptr))) {
-        if (global->mutable_) {
-          print_error(ctx, &export_->var.loc,
-                      "mutable globals cannot be exported");
-        }
-      }
-      break;
-    }
-  }
-}
-
-static void on_duplicate_binding(BindingHashEntry* a,
-                                 BindingHashEntry* b,
-                                 void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  /* choose the location that is later in the file */
-  Location* a_loc = &a->binding.loc;
-  Location* b_loc = &b->binding.loc;
-  Location* loc = a_loc->line > b_loc->line ? a_loc : b_loc;
-  print_error(ctx, loc, "redefinition of export \"" PRIstringslice "\"",
-              WABT_PRINTF_STRING_SLICE_ARG(a->binding.name));
-}
-
-static void check_duplicate_export_bindings(Context* ctx,
-                                            const Module* module) {
-  find_duplicate_bindings(&module->export_bindings, on_duplicate_binding, ctx);
-}
-
-static void check_module(Context* ctx, const Module* module) {
-  bool seen_start = false;
-
-  ctx->current_module = module;
-  ctx->current_table_index = 0;
-  ctx->current_memory_index = 0;
-  ctx->current_global_index = 0;
-  ctx->num_imported_globals = 0;
-
-  ModuleField* field;
-  for (field = module->first_field; field; field = field->next) {
-    switch (field->type) {
-      case ModuleFieldType::Func:
-        check_func(ctx, &field->loc, &field->func);
-        break;
-
-      case ModuleFieldType::Global:
-        check_global(ctx, &field->loc, &field->global);
-        ctx->current_global_index++;
-        break;
-
-      case ModuleFieldType::Import:
-        check_import(ctx, &field->loc, &field->import);
-        break;
-
-      case ModuleFieldType::Export:
-        check_export(ctx, &field->export_);
-        break;
-
-      case ModuleFieldType::Table:
-        check_table(ctx, &field->loc, &field->table);
-        ctx->current_table_index++;
-        break;
-
-      case ModuleFieldType::ElemSegment:
-        /* checked below */
-        break;
-
-      case ModuleFieldType::Memory:
-        check_memory(ctx, &field->loc, &field->memory);
-        ctx->current_memory_index++;
-        break;
-
-      case ModuleFieldType::DataSegment:
-        /* checked below */
-        break;
-
-      case ModuleFieldType::FuncType:
-        break;
-
-      case ModuleFieldType::Start: {
-        if (seen_start) {
-          print_error(ctx, &field->loc, "only one start function allowed");
-        }
-
-        const Func* start_func = nullptr;
-        check_func_var(ctx, &field->start, &start_func);
-        if (start_func) {
-          if (get_num_params(start_func) != 0) {
-            print_error(ctx, &field->loc, "start function must be nullary");
+          case ExprType::GlobalGet: {
+            Var var = cast<GlobalGetExpr>(expr)->var;
+            result_ |=
+                validator_.OnElemSegmentInitExpr_GlobalGet(expr->loc, var);
+            break;
           }
 
-          if (get_num_results(start_func) != 0) {
-            print_error(ctx, &field->loc,
-                        "start function must not return anything");
-          }
+          default:
+            result_ |= validator_.OnElemSegmentInitExpr_Other(field.loc);
+            break;
         }
-        seen_start = true;
-        break;
+      } else if (f->elem_segment.offset.size() > 1) {
+        result_ |= validator_.OnElemSegmentInitExpr_Other(field.loc);
+      }
+
+      // Element expr.
+      for (auto&& elem_expr : f->elem_segment.elem_exprs) {
+        switch (elem_expr.kind) {
+          case ElemExprKind::RefNull:
+            // TODO: better location?
+            result_ |= validator_.OnElemSegmentElemExpr_RefNull(field.loc,
+                                                                elem_expr.type);
+            break;
+
+          case ElemExprKind::RefFunc:
+            result_ |= validator_.OnElemSegmentElemExpr_RefFunc(
+                elem_expr.var.loc, elem_expr.var);
+            break;
+        }
       }
     }
   }
 
-  check_elem_segments(ctx, module);
-  check_data_segments(ctx, module);
-  check_duplicate_export_bindings(ctx, module);
+  // DataCount section.
+  validator_.OnDataCount(module->data_segments.size());
+
+  // Code section.
+  Index func_index = module->num_func_imports;
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<FuncModuleField>(&field)) {
+      result_ |= validator_.BeginFunctionBody(field.loc, func_index++);
+
+      for (auto&& decl : f->func.local_types.decls()) {
+        // TODO: Better location?
+        result_ |= validator_.OnLocalDecl(field.loc, decl.second, decl.first);
+      }
+
+      ExprVisitor visitor(this);
+      result_ |= visitor.VisitExprList(const_cast<ExprList&>(f->func.exprs));
+      result_ |= validator_.EndFunctionBody(field.loc);
+    }
+  }
+
+  // Data segment section.
+  for (const ModuleField& field : module->fields) {
+    if (auto* f = dyn_cast<DataSegmentModuleField>(&field)) {
+      result_ |= validator_.OnDataSegment(
+          field.loc, f->data_segment.memory_var, f->data_segment.kind);
+
+      // Init expr.
+      if (f->data_segment.offset.size() == 1) {
+        const Expr* expr = &f->data_segment.offset.front();
+
+        switch (expr->type()) {
+          case ExprType::Const:
+            result_ |= validator_.OnDataSegmentInitExpr_Const(
+                expr->loc, cast<ConstExpr>(expr)->const_.type());
+            break;
+
+          case ExprType::GlobalGet: {
+            Var var = cast<GlobalGetExpr>(expr)->var;
+            result_ |=
+                validator_.OnDataSegmentInitExpr_GlobalGet(expr->loc, var);
+            break;
+          }
+
+          default:
+            result_ |= validator_.OnDataSegmentInitExpr_Other(field.loc);
+            break;
+        }
+      } else if (f->data_segment.offset.size() > 1) {
+        result_ |= validator_.OnDataSegmentInitExpr_Other(field.loc);
+      }
+    }
+  }
+
+  result_ |= validator_.EndModule();
+
+  return result_;
 }
 
-/* returns the result type of the invoked function, checked by the caller;
- * returning nullptr means that another error occured first, so the result type
- * should be ignored. */
-static const TypeVector* check_invoke(Context* ctx, const Action* action) {
-  const ActionInvoke* invoke = &action->invoke;
-  const Module* module = get_module_by_var(ctx->script, &action->module_var);
+// Returns the result type of the invoked function, checked by the caller;
+// returning nullptr means that another error occured first, so the result type
+// should be ignored.
+const TypeVector* ScriptValidator::CheckInvoke(const InvokeAction* action) {
+  const Module* module = script_->GetModule(action->module_var);
   if (!module) {
-    print_error(ctx, &action->loc, "unknown module");
+    PrintError(&action->loc, "unknown module");
     return nullptr;
   }
 
-  Export* export_ = get_export_by_name(module, &invoke->name);
+  const Export* export_ = module->GetExport(action->name);
   if (!export_) {
-    print_error(ctx, &action->loc,
-                "unknown function export \"" PRIstringslice "\"",
-                WABT_PRINTF_STRING_SLICE_ARG(invoke->name));
+    PrintError(&action->loc, "unknown function export \"%s\"",
+               action->name.c_str());
     return nullptr;
   }
 
-  Func* func = get_func_by_var(module, &export_->var);
+  const Func* func = module->GetFunc(export_->var);
   if (!func) {
-    /* this error will have already been reported, just skip it */
+    // This error will have already been reported, just skip it.
     return nullptr;
   }
 
-  size_t actual_args = invoke->args.size;
-  size_t expected_args = get_num_params(func);
+  size_t actual_args = action->args.size();
+  size_t expected_args = func->GetNumParams();
   if (expected_args != actual_args) {
-    print_error(ctx, &action->loc, "too %s parameters to function. got %" PRIzd
-                                   ", expected %" PRIzd,
-                actual_args > expected_args ? "many" : "few", actual_args,
-                expected_args);
+    PrintError(&action->loc,
+               "too %s parameters to function. got %" PRIzd
+               ", expected %" PRIzd,
+               actual_args > expected_args ? "many" : "few", actual_args,
+               expected_args);
     return nullptr;
   }
-  size_t i;
-  for (i = 0; i < actual_args; ++i) {
-    Const* const_ = &invoke->args.data[i];
-    check_type_index(ctx, &const_->loc, const_->type, get_param_type(func, i),
-                     "invoke", i, "argument");
+  for (size_t i = 0; i < actual_args; ++i) {
+    const Const* const_ = &action->args[i];
+    CheckTypeIndex(&const_->loc, const_->type(), func->GetParamType(i),
+                   "invoke", i, "argument");
   }
 
   return &func->decl.sig.result_types;
 }
 
-static Result check_get(Context* ctx, const Action* action, Type* out_type) {
-  const ActionGet* get = &action->get;
-  const Module* module = get_module_by_var(ctx->script, &action->module_var);
+Result ScriptValidator::CheckGet(const GetAction* action, Type* out_type) {
+  const Module* module = script_->GetModule(action->module_var);
   if (!module) {
-    print_error(ctx, &action->loc, "unknown module");
+    PrintError(&action->loc, "unknown module");
     return Result::Error;
   }
 
-  Export* export_ = get_export_by_name(module, &get->name);
+  const Export* export_ = module->GetExport(action->name);
   if (!export_) {
-    print_error(ctx, &action->loc,
-                "unknown global export \"" PRIstringslice "\"",
-                WABT_PRINTF_STRING_SLICE_ARG(get->name));
+    PrintError(&action->loc, "unknown global export \"%s\"",
+               action->name.c_str());
     return Result::Error;
   }
 
-  Global* global = get_global_by_var(module, &export_->var);
+  const Global* global = module->GetGlobal(export_->var);
   if (!global) {
-    /* this error will have already been reported, just skip it */
+    // This error will have already been reported, just skip it.
     return Result::Error;
   }
 
@@ -901,125 +932,111 @@ static Result check_get(Context* ctx, const Action* action, Type* out_type) {
   return Result::Ok;
 }
 
-static ActionResult check_action(Context* ctx, const Action* action) {
+ScriptValidator::ActionResult ScriptValidator::CheckAction(
+    const Action* action) {
   ActionResult result;
-  WABT_ZERO_MEMORY(result);
+  ZeroMemory(result);
 
-  switch (action->type) {
+  switch (action->type()) {
     case ActionType::Invoke:
-      result.types = check_invoke(ctx, action);
+      result.types = CheckInvoke(cast<InvokeAction>(action));
       result.kind =
-          result.types ? ActionResultKind::Types : ActionResultKind::Error;
+          result.types ? ActionResult::Kind::Types : ActionResult::Kind::Error;
       break;
 
     case ActionType::Get:
-      if (WABT_SUCCEEDED(check_get(ctx, action, &result.type)))
-        result.kind = ActionResultKind::Type;
-      else
-        result.kind = ActionResultKind::Error;
+      if (Succeeded(CheckGet(cast<GetAction>(action), &result.type))) {
+        result.kind = ActionResult::Kind::Type;
+      } else {
+        result.kind = ActionResult::Kind::Error;
+      }
       break;
   }
 
   return result;
 }
 
-static void check_command(Context* ctx, const Command* command) {
+void ScriptValidator::CheckCommand(const Command* command) {
   switch (command->type) {
-    case CommandType::Module:
-      check_module(ctx, &command->module);
+    case CommandType::Module: {
+      Validator module_validator(errors_, &cast<ModuleCommand>(command)->module,
+                                 options_);
+      module_validator.CheckModule();
       break;
+    }
 
     case CommandType::Action:
-      /* ignore result type */
-      check_action(ctx, &command->action);
+      // Ignore result type.
+      CheckAction(cast<ActionCommand>(command)->action.get());
       break;
 
     case CommandType::Register:
     case CommandType::AssertMalformed:
     case CommandType::AssertInvalid:
-    case CommandType::AssertInvalidNonBinary:
     case CommandType::AssertUnlinkable:
     case CommandType::AssertUninstantiable:
-      /* ignore */
+      // Ignore.
       break;
 
     case CommandType::AssertReturn: {
-      const Action* action = &command->assert_return.action;
-      ActionResult result = check_action(ctx, action);
+      auto* assert_return_command = cast<AssertReturnCommand>(command);
+      const Action* action = assert_return_command->action.get();
+      ActionResult result = CheckAction(action);
+      // Here we take the concrete expected output types verify those actains
+      // the types that are the result of the action.
+      TypeVector actual_types;
+      for (auto ex : assert_return_command->expected) {
+        actual_types.push_back(ex.type());
+      }
       switch (result.kind) {
-        case ActionResultKind::Types:
-          check_const_types(ctx, &action->loc, result.types,
-                            &command->assert_return.expected, "action");
+        case ActionResult::Kind::Types:
+          CheckResultTypes(&action->loc, actual_types, *result.types, "action");
           break;
 
-        case ActionResultKind::Type:
-          check_const_type(ctx, &action->loc, result.type,
-                           &command->assert_return.expected, "action");
+        case ActionResult::Kind::Type:
+          CheckResultTypes(&action->loc, actual_types, {result.type}, "action");
           break;
 
-        case ActionResultKind::Error:
-          /* error occurred, don't do any further checks */
+        case ActionResult::Kind::Error:
+          // Error occurred, don't do any further checks.
           break;
       }
-      break;
-    }
-
-    case CommandType::AssertReturnNan: {
-      const Action* action = &command->assert_return_nan.action;
-      ActionResult result = check_action(ctx, action);
-
-      /* a valid result type will either be f32 or f64; convert a TYPES result
-       * into a TYPE result, so it is easier to check below. Type::Any is
-       * used to specify a type that should not be checked (because an earlier
-       * error occurred). */
-      if (result.kind == ActionResultKind::Types) {
-        if (result.types->size == 1) {
-          result.kind = ActionResultKind::Type;
-          result.type = result.types->data[0];
-        } else {
-          print_error(ctx, &action->loc, "expected 1 result, got %" PRIzd,
-                      result.types->size);
-          result.type = Type::Any;
-        }
-      }
-
-      if (result.kind == ActionResultKind::Type && result.type != Type::Any)
-        check_assert_return_nan_type(ctx, &action->loc, result.type, "action");
       break;
     }
 
     case CommandType::AssertTrap:
+      // ignore result type.
+      CheckAction(cast<AssertTrapCommand>(command)->action.get());
+      break;
     case CommandType::AssertExhaustion:
-      /* ignore result type */
-      check_action(ctx, &command->assert_trap.action);
+      // ignore result type.
+      CheckAction(cast<AssertExhaustionCommand>(command)->action.get());
       break;
   }
 }
 
-static void destroy_context(Context* ctx) {
-  destroy_typechecker(&ctx->typechecker);
+Result ScriptValidator::CheckScript() {
+  for (const std::unique_ptr<Command>& command : script_->commands)
+    CheckCommand(command.get());
+  return result_;
 }
 
-Result validate_script(AstLexer* lexer,
-                       const struct Script* script,
-                       SourceErrorHandler* error_handler) {
-  Context ctx;
-  WABT_ZERO_MEMORY(ctx);
-  ctx.lexer = lexer;
-  ctx.error_handler = error_handler;
-  ctx.result = Result::Ok;
-  ctx.script = script;
+}  // end anonymous namespace
 
-  TypeCheckerErrorHandler tc_error_handler;
-  tc_error_handler.on_error = on_typechecker_error;
-  tc_error_handler.user_data = &ctx;
-  ctx.typechecker.error_handler = &tc_error_handler;
+Result ValidateScript(const Script* script,
+                      Errors* errors,
+                      const ValidateOptions& options) {
+  ScriptValidator validator(errors, script, options);
 
-  size_t i;
-  for (i = 0; i < script->commands.size; ++i)
-    check_command(&ctx, &script->commands.data[i]);
-  destroy_context(&ctx);
-  return ctx.result;
+  return validator.CheckScript();
+}
+
+Result ValidateModule(const Module* module,
+                      Errors* errors,
+                      const ValidateOptions& options) {
+  Validator validator(errors, module, options);
+
+  return validator.CheckModule();
 }
 
 }  // namespace wabt

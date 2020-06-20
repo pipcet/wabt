@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func
     i32.const 0
@@ -8,7 +8,7 @@
     drop
     i32.const 4294967295
     drop
-    i32.const -0x80000000 
+    i32.const -0x80000000
     drop
     i32.const 0xffffffff
     drop
@@ -40,15 +40,15 @@
     drop
     f32.const +nan:0xabc
     drop
-    f32.const infinity
+    f32.const inf
     drop
-    f32.const -infinity
+    f32.const -inf
     drop
-    f32.const +infinity
+    f32.const +inf
     drop
     f32.const -0x1p-1
     drop
-    f32.const 0x1.921fb6p+2 
+    f32.const 0x1.921fb6p+2
     drop
     f64.const 0.0
     drop
@@ -68,11 +68,11 @@
     drop
     f64.const +nan:0xabc
     drop
-    f64.const infinity
+    f64.const inf
     drop
-    f64.const -infinity
+    f64.const -inf
     drop
-    f64.const +infinity
+    f64.const +inf
     drop
     f64.const -0x1p-1
     drop
@@ -222,28 +222,31 @@
 0000015: 9a02                                      ; FIXUP func body size
 ; move data: [14, 131) -> [15, 132)
 0000013: 9d02                                      ; FIXUP section size
-const.wasm:	file format wasm 0x000001
+
+const.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000016 func[0]:
+000018 func[0]:
  000019: 41 00                      | i32.const 0
  00001b: 1a                         | drop
- 00001c: 41 80 80 80 80 78          | i32.const 0x80000000
+ 00001c: 41 80 80 80 80 78          | i32.const 2147483648
  000022: 1a                         | drop
- 000023: 41 7f                      | i32.const 0xffffffff
+ 000023: 41 7f                      | i32.const 4294967295
  000025: 1a                         | drop
- 000026: 41 80 80 80 80 78          | i32.const 0x80000000
+ 000026: 41 80 80 80 80 78          | i32.const 2147483648
  00002c: 1a                         | drop
- 00002d: 41 7f                      | i32.const 0xffffffff
+ 00002d: 41 7f                      | i32.const 4294967295
  00002f: 1a                         | drop
  000030: 42 00                      | i64.const 0
  000032: 1a                         | drop
- 000033: 42 80 80 80 80 80 80 80 80 80 | i64.const 0
+ 000033: 42 80 80 80 80 80 80 80 80 | i64.const -9223372036854775808
+ 00003c: 80 7f                      | 
  00003e: 1a                         | drop
  00003f: 42 7f                      | i64.const -1
  000041: 1a                         | drop
- 000042: 42 80 80 80 80 80 80 80 80 80 | i64.const 0
+ 000042: 42 80 80 80 80 80 80 80 80 | i64.const -9223372036854775808
+ 00004b: 80 7f                      | 
  00004d: 1a                         | drop
  00004e: 42 7f                      | i64.const -1
  000050: 1a                         | drop
@@ -265,11 +268,11 @@ Code Disassembly:
  000080: 1a                         | drop
  000081: 43 bc 0a 80 7f             | f32.const nan:0xabc
  000086: 1a                         | drop
- 000087: 43 00 00 80 7f             | f32.const infinity
+ 000087: 43 00 00 80 7f             | f32.const inf
  00008c: 1a                         | drop
- 00008d: 43 00 00 80 ff             | f32.const -infinity
+ 00008d: 43 00 00 80 ff             | f32.const -inf
  000092: 1a                         | drop
- 000093: 43 00 00 80 7f             | f32.const infinity
+ 000093: 43 00 00 80 7f             | f32.const inf
  000098: 1a                         | drop
  000099: 43 00 00 00 bf             | f32.const -0x1p-1
  00009e: 1a                         | drop
@@ -293,14 +296,15 @@ Code Disassembly:
  0000f4: 1a                         | drop
  0000f5: 44 bc 0a 00 00 00 00 f0 7f | f64.const nan:0xabc
  0000fe: 1a                         | drop
- 0000ff: 44 00 00 00 00 00 00 f0 7f | f64.const infinity
+ 0000ff: 44 00 00 00 00 00 00 f0 7f | f64.const inf
  000108: 1a                         | drop
- 000109: 44 00 00 00 00 00 00 f0 ff | f64.const -infinity
+ 000109: 44 00 00 00 00 00 00 f0 ff | f64.const -inf
  000112: 1a                         | drop
- 000113: 44 00 00 00 00 00 00 f0 7f | f64.const infinity
+ 000113: 44 00 00 00 00 00 00 f0 7f | f64.const inf
  00011c: 1a                         | drop
  00011d: 44 00 00 00 00 00 00 e0 bf | f64.const -0x1p-1
  000126: 1a                         | drop
  000127: 44 18 2d 44 54 fb 21 19 40 | f64.const 0x1.921fb54442d18p+2
  000130: 1a                         | drop
+ 000131: 0b                         | end
 ;;; STDOUT ;;)

@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func 
     nop))
@@ -32,10 +32,12 @@
 0000018: 0b                                        ; end
 0000015: 03                                        ; FIXUP func body size
 0000013: 05                                        ; FIXUP section size
-nop.wasm:	file format wasm 0x000001
+
+nop.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000015 func[0]:
+000016 func[0]:
  000017: 01                         | nop
+ 000018: 0b                         | end
 ;;; STDOUT ;;)

@@ -1,5 +1,6 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v --spec
+;;; TOOL: run-objdump-spec
+;;; ARGS0: -v
+;;; ARGS1: %(temp_file)s.0.wasm %(temp_file)s.1.wasm %(temp_file)s.2.wasm %(temp_file)s.3.wasm
 (module (memory 1))
 (module (memory 2))
 (module (memory 4))
@@ -45,19 +46,23 @@
 000000b: 00                                        ; limits: flags
 000000c: 05                                        ; limits: initial
 0000009: 03                                        ; FIXUP section size
-memory-data-size.0.wasm:	file format wasm 0x000001
+
+memory-data-size.0.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-memory-data-size.1.wasm:	file format wasm 0x000001
+
+memory-data-size.1.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-memory-data-size.2.wasm:	file format wasm 0x000001
+
+memory-data-size.2.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-memory-data-size.3.wasm:	file format wasm 0x000001
+
+memory-data-size.3.wasm:	file format wasm 0x1
 
 Code Disassembly:
 

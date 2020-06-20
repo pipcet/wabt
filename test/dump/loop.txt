@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func
     loop
@@ -39,13 +39,15 @@
 000001c: 0b                                        ; end
 0000015: 07                                        ; FIXUP func body size
 0000013: 09                                        ; FIXUP section size
-loop.wasm:	file format wasm 0x000001
+
+loop.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000015 func[0]:
+000016 func[0]:
  000017: 03 40                      | loop
  000019: 01                         |   nop
  00001a: 01                         |   nop
  00001b: 0b                         | end
+ 00001c: 0b                         | end
 ;;; STDOUT ;;)

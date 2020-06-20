@@ -17,25 +17,13 @@
 #ifndef WABT_STREAM_H_
 #define WABT_STREAM_H_
 
-#include <stdio.h>
+#include <cassert>
+#include <memory>
+#include <vector>
 
-#include "common.h"
-#include "writer.h"
+#include "src/common.h"
 
 namespace wabt {
-
-struct Stream {
-  Writer* writer;
-  size_t offset;
-  Result result;
-  /* if non-null, log all writes to this stream */
-  struct Stream* log_stream;
-};
-
-struct FileStream {
-  Stream base;
-  FileWriter writer;
-};
 
 /* whether to display the ASCII characters in the debug output for
  * write_memory */
@@ -44,55 +32,188 @@ enum class PrintChars {
   Yes = 1,
 };
 
-void init_stream(Stream* stream, Writer* writer, Stream* log_stream);
-void init_file_stream_from_existing(FileStream* stream, FILE* file);
-Stream* init_stdout_stream(void);
-Stream* init_stderr_stream(void);
+class Stream {
+ public:
+  explicit Stream(Stream* log_stream = nullptr);
+  virtual ~Stream() = default;
 
-/* helper functions for writing to a Stream. the |desc| parameter is
- * optional, and will be appended to the log stream if |stream.log_stream| is
- * non-null. */
-void write_data_at(Stream*,
-                   size_t offset,
+  size_t offset() { return offset_; }
+  Result result() { return result_; }
+
+  void set_log_stream(Stream* stream) {
+    assert(stream);
+    log_stream_ = stream;
+  }
+
+  Stream& log_stream() {
+    assert(log_stream_);
+    return *log_stream_;
+  }
+
+  bool has_log_stream() const { return log_stream_ != nullptr; }
+
+  void ClearOffset() { offset_ = 0; }
+  void AddOffset(ssize_t delta);
+
+  void WriteData(const void* src,
+                 size_t size,
+                 const char* desc = nullptr,
+                 PrintChars = PrintChars::No);
+
+  template <typename T>
+  void WriteData(const std::vector<T> src,
+                 const char* desc,
+                 PrintChars print_chars = PrintChars::No) {
+    if (!src.empty()) {
+      WriteData(src.data(), src.size() * sizeof(T), desc, print_chars);
+    }
+  }
+
+  void WriteDataAt(size_t offset,
                    const void* src,
                    size_t size,
-                   PrintChars print_chars,
-                   const char* desc);
-void write_data(Stream*, const void* src, size_t size, const char* desc);
-void move_data(Stream*, size_t dst_offset, size_t src_offset, size_t size);
+                   const char* desc = nullptr,
+                   PrintChars = PrintChars::No);
 
-void WABT_PRINTF_FORMAT(2, 3) writef(Stream*, const char* format, ...);
-/* specified as uint32_t instead of uint8_t so we can check if the value given
- * is in range before wrapping */
-void write_u8(Stream*, uint32_t value, const char* desc);
-void write_u32(Stream*, uint32_t value, const char* desc);
-void write_u64(Stream*, uint64_t value, const char* desc);
+  void MoveData(size_t dst_offset, size_t src_offset, size_t size);
 
-static WABT_INLINE void write_char(Stream* stream, char c) {
-  write_u8(stream, c, nullptr);
-}
+  void Truncate(size_t size);
 
-/* dump memory as text, similar to the xxd format */
-void write_memory_dump(Stream*,
-                       const void* start,
+  void WABT_PRINTF_FORMAT(2, 3) Writef(const char* format, ...);
+
+  // Specified as uint32_t instead of uint8_t so we can check if the value
+  // given is in range before wrapping.
+  void WriteU8(uint32_t value,
+               const char* desc = nullptr,
+               PrintChars print_chars = PrintChars::No) {
+    assert(value <= UINT8_MAX);
+    Write(static_cast<uint8_t>(value), desc, print_chars);
+  }
+  void WriteU32(uint32_t value,
+                const char* desc = nullptr,
+                PrintChars print_chars = PrintChars::No) {
+    Write(value, desc, print_chars);
+  }
+  void WriteU64(uint64_t value,
+                const char* desc = nullptr,
+                PrintChars print_chars = PrintChars::No) {
+    Write(value, desc, print_chars);
+  }
+  void WriteU128(v128 value,
+                 const char* desc = nullptr,
+                 PrintChars print_chars = PrintChars::No) {
+    Write(value, desc, print_chars);
+  }
+
+  void WriteChar(char c,
+                 const char* desc = nullptr,
+                 PrintChars print_chars = PrintChars::No) {
+    WriteU8(static_cast<unsigned char>(c), desc, print_chars);
+  }
+
+  // Dump memory as text, similar to the xxd format.
+  void WriteMemoryDump(const void* start,
                        size_t size,
-                       size_t offset,
-                       PrintChars print_chars,
-                       const char* prefix,
-                       const char* desc);
+                       size_t offset = 0,
+                       PrintChars print_chars = PrintChars::No,
+                       const char* prefix = nullptr,
+                       const char* desc = nullptr);
 
-static WABT_INLINE void write_output_buffer_memory_dump(
-    Stream* stream,
-    struct OutputBuffer* buf) {
-  write_memory_dump(stream, buf->start, buf->size, 0, PrintChars::No, nullptr,
-                    nullptr);
-}
+  // Convenience functions for writing enums.
+  template <typename T>
+  void WriteU8Enum(T value,
+                   const char* desc = nullptr,
+                   PrintChars print_chars = PrintChars::No) {
+    WriteU8(static_cast<uint32_t>(value), desc, print_chars);
+  }
 
-/* Helper function for writing enums as u8. */
-template <typename T>
-void write_u8_enum(Stream* stream, T value, const char* desc) {
-  write_u8(stream, static_cast<uint32_t>(value), desc);
-}
+  virtual void Flush() {}
+
+ protected:
+  virtual Result WriteDataImpl(size_t offset,
+                               const void* data,
+                               size_t size) = 0;
+  virtual Result MoveDataImpl(size_t dst_offset,
+                              size_t src_offset,
+                              size_t size) = 0;
+  virtual Result TruncateImpl(size_t size) = 0;
+
+ private:
+  template <typename T>
+  void Write(const T& data, const char* desc, PrintChars print_chars) {
+    WriteData(&data, sizeof(data), desc, print_chars);
+  }
+
+  size_t offset_;
+  Result result_;
+  // Not owned. If non-null, log all writes to this stream.
+  Stream* log_stream_;
+};
+
+struct OutputBuffer {
+  Result WriteToFile(string_view filename) const;
+
+  void clear() { data.clear(); }
+  size_t size() const { return data.size(); }
+
+  std::vector<uint8_t> data;
+};
+
+class MemoryStream : public Stream {
+ public:
+  WABT_DISALLOW_COPY_AND_ASSIGN(MemoryStream);
+  explicit MemoryStream(Stream* log_stream = nullptr);
+  explicit MemoryStream(std::unique_ptr<OutputBuffer>&&,
+                        Stream* log_stream = nullptr);
+
+  OutputBuffer& output_buffer() { return *buf_; }
+  std::unique_ptr<OutputBuffer> ReleaseOutputBuffer();
+
+  void Clear();
+
+  Result WriteToFile(string_view filename) {
+    return buf_->WriteToFile(filename);
+  }
+
+ protected:
+  Result WriteDataImpl(size_t offset, const void* data, size_t size) override;
+  Result MoveDataImpl(size_t dst_offset,
+                      size_t src_offset,
+                      size_t size) override;
+  Result TruncateImpl(size_t size) override;
+
+ private:
+  std::unique_ptr<OutputBuffer> buf_;
+};
+
+class FileStream : public Stream {
+ public:
+  WABT_DISALLOW_COPY_AND_ASSIGN(FileStream);
+  explicit FileStream(string_view filename, Stream* log_stream = nullptr);
+  explicit FileStream(FILE*, Stream* log_stream = nullptr);
+  FileStream(FileStream&&);
+  FileStream& operator=(FileStream&&);
+  ~FileStream() override;
+
+  static std::unique_ptr<FileStream> CreateStdout();
+  static std::unique_ptr<FileStream> CreateStderr();
+
+  bool is_open() const { return file_ != nullptr; }
+
+  void Flush() override;
+
+ protected:
+  Result WriteDataImpl(size_t offset, const void* data, size_t size) override;
+  Result MoveDataImpl(size_t dst_offset,
+                      size_t src_offset,
+                      size_t size) override;
+  Result TruncateImpl(size_t size) override;
+
+ private:
+  FILE* file_;
+  size_t offset_;
+  bool should_close_;
+};
 
 }  // namespace wabt
 

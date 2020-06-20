@@ -1,5 +1,6 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v --dump-verbose
+;;; TOOL: run-objdump
+;;; ARGS0: -v
+;;; ARGS1: -x
 (module
   (memory 1)
   (data (i32.const 10) "hello")
@@ -20,7 +21,7 @@
 000000e: 00                                        ; section size (guess)
 000000f: 02                                        ; num data segments
 ; data segment header 0
-0000010: 00                                        ; memory index
+0000010: 00                                        ; segment flags
 0000011: 41                                        ; i32.const
 0000012: 0a                                        ; i32 literal
 0000013: 0b                                        ; end
@@ -28,7 +29,7 @@
 ; data segment data 0
 0000015: 6865 6c6c 6f                              ; data segment data
 ; data segment header 1
-000001a: 00                                        ; memory index
+000001a: 00                                        ; segment flags
 000001b: 41                                        ; i32.const
 000001c: 14                                        ; i32 literal
 000001d: 0b                                        ; end
@@ -38,19 +39,20 @@
 000002f: 7073 756d 2064 6f6c 6f72 2073 6974 2061 
 000003f: 6d65 742c 2063 6f6e 7365 6374 6574 7572   ; data segment data
 000000e: 40                                        ; FIXUP section size
-memory.wasm:	file format wasm 0x000001
+
+memory.wasm:	file format wasm 0x1
 
 Section Details:
 
-Memory:
+Memory[1]:
  - memory[0] pages: initial=1
-Data:
- - memory[0] - init i32=10
-  - 0000000: 6865 6c6c 6f                             hello
- - memory[0] - init i32=20
-  - 0000000: 676f 6f64 6279 652c 204c 6f72 656d 2069  goodbye, Lorem i
-  - 0000010: 7073 756d 2064 6f6c 6f72 2073 6974 2061  psum dolor sit a
-  - 0000020: 6d65 742c 2063 6f6e 7365 6374 6574 7572  met, consectetur
+Data[2]:
+ - segment[0] memory=0 size=5 - init i32=10
+  - 000000a: 6865 6c6c 6f                             hello
+ - segment[1] memory=0 size=48 - init i32=20
+  - 0000014: 676f 6f64 6279 652c 204c 6f72 656d 2069  goodbye, Lorem i
+  - 0000024: 7073 756d 2064 6f6c 6f72 2073 6974 2061  psum dolor sit a
+  - 0000034: 6d65 742c 2063 6f6e 7365 6374 6574 7572  met, consectetur
 
 Code Disassembly:
 

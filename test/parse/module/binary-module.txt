@@ -1,4 +1,5 @@
-(module
+;;; TOOL: wat2wasm
+(module binary
   "\00asm"            ;; magic
   "\01\00\00\00"      ;; version
   "\01\05"            ;; type section, 5 bytes

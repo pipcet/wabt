@@ -1,8 +1,9 @@
+;;; TOOL: wat2wasm
 ;;; ERROR: 1
 (module (func) (export "
 (;; STDERR ;;;
-out/test/parse/bad-string-eof.txt:2:25: newline in string
+out/test/parse/bad-string-eof.txt:3:25: error: newline in string
 (module (func) (export "
                         ^
-out/test/parse/bad-string-eof.txt:3:1: syntax error, unexpected EOF, expecting TEXT
+out/test/parse/bad-string-eof.txt:4:1: error: unexpected token "EOF", expected a quoted string (e.g. "foo").
 ;;; STDERR ;;)

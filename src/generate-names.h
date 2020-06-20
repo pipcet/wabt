@@ -17,13 +17,29 @@
 #ifndef WABT_GENERATE_NAMES_H_
 #define WABT_GENERATE_NAMES_H_
 
-#include "common.h"
+#include "src/common.h"
 
 namespace wabt {
 
 struct Module;
 
-Result generate_names(struct Module*);
+enum NameOpts {
+  None = 0,
+  AlphaNames = 1 << 0,
+};
+
+Result GenerateNames(struct Module*, NameOpts opts = NameOpts::None);
+
+inline std::string IndexToAlphaName(Index index) {
+  std::string s;
+  do {
+    // For multiple chars, put most frequently changing char first.
+    s += 'a' + (index % 26);
+    index /= 26;
+    // Continue remaining sequence with 'a' rather than 'b'.
+  } while (index--);
+  return s;
+}
 
 }  // namespace wabt
 

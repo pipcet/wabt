@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func (param i32 i64 f32 f64)))
 (;; STDOUT ;;;
@@ -34,9 +34,11 @@
 000001b: 0b                                        ; end
 0000019: 02                                        ; FIXUP func body size
 0000017: 04                                        ; FIXUP section size
-param-multi.wasm:	file format wasm 0x000001
+
+param-multi.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000019 func[0]:
+00001a func[0]:
+ 00001b: 0b                         | end
 ;;; STDOUT ;;)

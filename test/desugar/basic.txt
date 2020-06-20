@@ -1,4 +1,4 @@
-;;; TOOL: wast-desugar
+;;; TOOL: wat-desugar
 (module
   (import "foo" "bar" (func (result i32)))
 
@@ -13,15 +13,15 @@
 (;; STDOUT ;;;
 (module
   (import "foo" "bar" (func (;0;) (result i32)))
-  (type (;0;) (func (result i32)))
   (global (;0;) i32 (i32.const 1))
-  (table (;0;) 1 1 anyfunc)
-  (elem (i32.const 0) 0)
+  (table (;0;) 1 1 funcref)
+  (elem (;0;) (i32.const 0) func 0)
   (memory (;0;) 1 1)
-  (data (i32.const 0) "hello")
+  (data (;0;) (i32.const 0) "hello")
   (func (;1;) (result i32)
     call 0
     i32.const 1
     i32.load8_s
-    i32.add))
+    i32.add)
+  (type (;0;) (func (result i32))))
 ;;; STDOUT ;;)

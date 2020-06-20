@@ -14,239 +14,128 @@
  * limitations under the License.
  */
 
-#include "common.h"
+#include "src/common.h"
 
-#include <assert.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <string.h>
-#include <limits.h>
+#include <cassert>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #if COMPILER_IS_MSVC
 #include <fcntl.h>
 #include <io.h>
 #include <stdlib.h>
 #define PATH_MAX _MAX_PATH
+#define stat _stat
+#define S_IFREG _S_IFREG
 #endif
 
 namespace wabt {
 
-OpcodeInfo g_opcode_info[kOpcodeCount];
+Reloc::Reloc(RelocType type, Offset offset, Index index, int32_t addend)
+    : type(type), offset(offset), index(index), addend(addend) {}
 
-/* TODO(binji): It's annoying to have to have an initializer function, but it
- * seems to be necessary as g++ doesn't allow non-trival designated
- * initializers (e.g. [314] = "blah") */
-void init_opcode_info(void) {
-  static bool s_initialized = false;
-  if (!s_initialized) {
-#define V(rtype, type1, type2, mem_size, code, NAME, text) \
-  g_opcode_info[code].name = text;                         \
-  g_opcode_info[code].result_type = Type::rtype;           \
-  g_opcode_info[code].param1_type = Type::type1;           \
-  g_opcode_info[code].param2_type = Type::type2;           \
-  g_opcode_info[code].memory_size = mem_size;
+const char* g_kind_name[] = {"func", "table", "memory", "global", "event"};
+WABT_STATIC_ASSERT(WABT_ARRAY_SIZE(g_kind_name) == kExternalKindCount);
 
-    WABT_FOREACH_OPCODE(V)
+const char* g_reloc_type_name[] = {
+    "R_WASM_FUNCTION_INDEX_LEB",  "R_WASM_TABLE_INDEX_SLEB",
+    "R_WASM_TABLE_INDEX_I32",     "R_WASM_MEMORY_ADDR_LEB",
+    "R_WASM_MEMORY_ADDR_SLEB",    "R_WASM_MEMORY_ADDR_I32",
+    "R_WASM_TYPE_INDEX_LEB",      "R_WASM_GLOBAL_INDEX_LEB",
+    "R_WASM_FUNCTION_OFFSET_I32", "R_WASM_SECTION_OFFSET_I32",
+    "R_WASM_EVENT_INDEX_LEB",     "R_WASM_MEMORY_ADDR_REL_SLEB",
+    "R_WASM_TABLE_INDEX_REL_SLEB",
+};
+WABT_STATIC_ASSERT(WABT_ARRAY_SIZE(g_reloc_type_name) == kRelocTypeCount);
 
-#undef V
+static Result ReadStdin(std::vector<uint8_t>* out_data) {
+  out_data->resize(0);
+  uint8_t buffer[4096];
+  while (true) {
+    size_t bytes_read = fread(buffer, 1, sizeof(buffer), stdin);
+    if (bytes_read == 0) {
+      if (ferror(stdin)) {
+        fprintf(stderr, "error reading from stdin: %s\n", strerror(errno));
+        return Result::Error;
+      }
+      return Result::Ok;
+    }
+    size_t old_size = out_data->size();
+    out_data->resize(old_size + bytes_read);
+    memcpy(out_data->data() + old_size, buffer, bytes_read);
   }
 }
 
-const char* g_kind_name[] = {"func", "table", "memory", "global"};
-WABT_STATIC_ASSERT(WABT_ARRAY_SIZE(g_kind_name) == kExternalKindCount);
+Result ReadFile(string_view filename, std::vector<uint8_t>* out_data) {
+  std::string filename_str = filename.to_string();
+  const char* filename_cstr = filename_str.c_str();
 
-const char* g_reloc_type_name[] = {"R_FUNC_INDEX_LEB", "R_TABLE_INDEX_SLEB",
-                                   "R_TABLE_INDEX_I32", "R_GLOBAL_INDEX_LEB",
-                                   "R_DATA"};
-WABT_STATIC_ASSERT(WABT_ARRAY_SIZE(g_reloc_type_name) == kRelocTypeCount);
+  if (filename == "-") {
+    return ReadStdin(out_data);
+  }
 
-bool is_naturally_aligned(Opcode opcode, uint32_t alignment) {
-  uint32_t opcode_align = get_opcode_memory_size(opcode);
-  return alignment == WABT_USE_NATURAL_ALIGNMENT || alignment == opcode_align;
-}
+  struct stat statbuf;
+  if (stat(filename_cstr, &statbuf) < 0) {
+    fprintf(stderr, "%s: %s\n", filename_cstr, strerror(errno));
+    return Result::Error;
+  }
 
-uint32_t get_opcode_alignment(Opcode opcode, uint32_t alignment) {
-  if (alignment == WABT_USE_NATURAL_ALIGNMENT)
-    return get_opcode_memory_size(opcode);
-  return alignment;
-}
+  if (!(statbuf.st_mode & S_IFREG)) {
+    fprintf(stderr, "%s: not a regular file\n", filename_cstr);
+    return Result::Error;
+  }
 
-StringSlice empty_string_slice(void) {
-  StringSlice result;
-  result.start = "";
-  result.length = 0;
-  return result;
-}
-
-bool string_slice_eq_cstr(const StringSlice* s1, const char* s2) {
-  size_t s2_len = strlen(s2);
-  if (s2_len != s1->length)
-    return false;
-
-  return strncmp(s1->start, s2, s2_len) == 0;
-}
-
-bool string_slice_startswith(const StringSlice* s1, const char* s2) {
-  size_t s2_len = strlen(s2);
-  if (s2_len > s1->length)
-    return false;
-
-  return strncmp(s1->start, s2, s2_len) == 0;
-}
-
-StringSlice string_slice_from_cstr(const char* string) {
-  StringSlice result;
-  result.start = string;
-  result.length = strlen(string);
-  return result;
-}
-
-bool string_slice_is_empty(const StringSlice* str) {
-  assert(str);
-  return !str->start || str->length == 0;
-}
-
-bool string_slices_are_equal(const StringSlice* a, const StringSlice* b) {
-  assert(a && b);
-  return a->start && b->start && a->length == b->length &&
-         memcmp(a->start, b->start, a->length) == 0;
-}
-
-void destroy_string_slice(StringSlice* str) {
-  assert(str);
-  wabt_free(const_cast<void*>(static_cast<const void*>(str->start)));
-}
-
-Result read_file(const char* filename, void** out_data, size_t* out_size) {
-  FILE* infile = fopen(filename, "rb");
+  FILE* infile = fopen(filename_cstr, "rb");
   if (!infile) {
-    const char* format = "unable to read file %s";
-    char msg[PATH_MAX + sizeof(format)];
-    snprintf(msg, sizeof(msg), format, filename);
-    perror(msg);
+    fprintf(stderr, "%s: %s\n", filename_cstr, strerror(errno));
     return Result::Error;
   }
 
   if (fseek(infile, 0, SEEK_END) < 0) {
     perror("fseek to end failed");
+    fclose(infile);
     return Result::Error;
   }
 
   long size = ftell(infile);
   if (size < 0) {
     perror("ftell failed");
+    fclose(infile);
     return Result::Error;
   }
 
   if (fseek(infile, 0, SEEK_SET) < 0) {
     perror("fseek to beginning failed");
+    fclose(infile);
     return Result::Error;
   }
 
-  void* data = wabt_alloc(size);
-  if (size != 0 && fread(data, size, 1, infile) != 1) {
-    perror("fread failed");
+  out_data->resize(size);
+  if (size != 0 && fread(out_data->data(), size, 1, infile) != 1) {
+    fprintf(stderr, "%s: fread failed: %s\n", filename_cstr, strerror(errno));
+    fclose(infile);
     return Result::Error;
   }
 
-  *out_data = data;
-  *out_size = size;
   fclose(infile);
   return Result::Ok;
 }
 
-static void print_carets(FILE* out,
-                         size_t num_spaces,
-                         size_t num_carets,
-                         size_t max_line) {
-  /* print the caret */
-  char* carets = static_cast<char*>(alloca(max_line));
-  memset(carets, '^', max_line);
-  if (num_carets > max_line - num_spaces)
-    num_carets = max_line - num_spaces;
-  /* always print at least one caret */
-  if (num_carets == 0)
-    num_carets = 1;
-  fprintf(out, "%*s%.*s\n", static_cast<int>(num_spaces), "",
-          static_cast<int>(num_carets), carets);
-}
-
-static void print_source_error(FILE* out,
-                               const Location* loc,
-                               const char* error,
-                               const char* source_line,
-                               size_t source_line_length,
-                               size_t source_line_column_offset) {
-  fprintf(out, "%s:%d:%d: %s\n", loc->filename, loc->line, loc->first_column,
-          error);
-  if (source_line && source_line_length > 0) {
-    fprintf(out, "%s\n", source_line);
-    size_t num_spaces = (loc->first_column - 1) - source_line_column_offset;
-    size_t num_carets = loc->last_column - loc->first_column;
-    print_carets(out, num_spaces, num_carets, source_line_length);
-  }
-}
-
-static void print_error_header(FILE* out, DefaultErrorHandlerInfo* info) {
-  if (info && info->header) {
-    switch (info->print_header) {
-      case PrintErrorHeader::Never:
-        break;
-
-      case PrintErrorHeader::Once:
-        info->print_header = PrintErrorHeader::Never;
-      /* Fallthrough. */
-
-      case PrintErrorHeader::Always:
-        fprintf(out, "%s:\n", info->header);
-        break;
-    }
-    /* If there's a header, indent the following message. */
-    fprintf(out, "  ");
-  }
-}
-
-static FILE* get_default_error_handler_info_output_file(
-    DefaultErrorHandlerInfo* info) {
-  return info && info->out_file ? info->out_file : stderr;
-}
-
-void default_source_error_callback(const Location* loc,
-                                   const char* error,
-                                   const char* source_line,
-                                   size_t source_line_length,
-                                   size_t source_line_column_offset,
-                                   void* user_data) {
-  DefaultErrorHandlerInfo* info =
-      static_cast<DefaultErrorHandlerInfo*>(user_data);
-  FILE* out = get_default_error_handler_info_output_file(info);
-  print_error_header(out, info);
-  print_source_error(out, loc, error, source_line, source_line_length,
-                     source_line_column_offset);
-}
-
-void default_binary_error_callback(uint32_t offset,
-                                   const char* error,
-                                   void* user_data) {
-  DefaultErrorHandlerInfo* info =
-      static_cast<DefaultErrorHandlerInfo*>(user_data);
-  FILE* out = get_default_error_handler_info_output_file(info);
-  print_error_header(out, info);
-  if (offset == WABT_UNKNOWN_OFFSET)
-    fprintf(out, "error: %s\n", error);
-  else
-    fprintf(out, "error: @0x%08x: %s\n", offset, error);
-  fflush(out);
-}
-
-void init_stdio() {
+void InitStdio() {
 #if COMPILER_IS_MSVC
   int result = _setmode(_fileno(stdout), _O_BINARY);
-  if (result == -1)
+  if (result == -1) {
     perror("Cannot set mode binary to stdout");
+  }
   result = _setmode(_fileno(stderr), _O_BINARY);
-  if (result == -1)
+  if (result == -1) {
     perror("Cannot set mode binary to stderr");
+  }
 #endif
 }
 

@@ -17,25 +17,43 @@
 #ifndef WABT_BINARY_WRITER_SPEC_H_
 #define WABT_BINARY_WRITER_SPEC_H_
 
-#include "ast.h"
-#include "binary-writer.h"
-#include "common.h"
+#include <functional>
+#include <utility>
+#include <vector>
+
+#include "src/binary-writer.h"
+#include "src/common.h"
+#include "src/ir.h"
 
 namespace wabt {
 
-struct Writer;
-
-#define WABT_WRITE_BINARY_SPEC_OPTIONS_DEFAULT \
-  { nullptr, WABT_WRITE_BINARY_OPTIONS_DEFAULT }
-
-struct WriteBinarySpecOptions {
-  const char* json_filename;
-  WriteBinaryOptions write_binary_options;
+struct FilenameMemoryStreamPair {
+  FilenameMemoryStreamPair(string_view filename,
+                           std::unique_ptr<MemoryStream> stream)
+      : filename(filename), stream(std::move(stream)) {}
+  std::string filename;
+  std::unique_ptr<MemoryStream> stream;
 };
 
-Result write_binary_spec_script(struct Script*,
-                                const char* source_filename,
-                                const WriteBinarySpecOptions*);
+typedef std::function<Stream*(string_view filename)>
+    WriteBinarySpecStreamFactory;
+
+Result WriteBinarySpecScript(Stream* json_stream,
+                             WriteBinarySpecStreamFactory module_stream_factory,
+                             Script*,
+                             string_view source_filename,
+                             string_view module_filename_noext,
+                             const WriteBinaryOptions&);
+
+// Convenience function for producing MemoryStream outputs all modules.
+Result WriteBinarySpecScript(
+    Stream* json_stream,
+    Script*,
+    string_view source_filename,
+    string_view module_filename_noext,
+    const WriteBinaryOptions&,
+    std::vector<FilenameMemoryStreamPair>* out_module_streams,
+    Stream* log_stream = nullptr);
 
 }  // namespace wabt
 

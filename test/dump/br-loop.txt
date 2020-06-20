@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func
     loop $cont
@@ -46,15 +46,17 @@
 0000021: 0b                                        ; end
 0000015: 0c                                        ; FIXUP func body size
 0000013: 0e                                        ; FIXUP section size
-br-loop.wasm:	file format wasm 0x000001
+
+br-loop.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000015 func[0]:
+000016 func[0]:
  000017: 03 40                      | loop
- 000019: 41 01                      |   i32.const 0x1
+ 000019: 41 01                      |   i32.const 1
  00001b: 04 40                      |   if
- 00001d: 0c 01                      |     br 0x1
+ 00001d: 0c 01                      |     br 1
  00001f: 0b                         |   end
  000020: 0b                         | end
+ 000021: 0b                         | end
 ;;; STDOUT ;;)

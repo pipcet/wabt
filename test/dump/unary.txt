@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func
     i32.const 0
@@ -95,11 +95,12 @@
 0000042: 0b                                        ; end
 0000015: 2d                                        ; FIXUP func body size
 0000013: 2f                                        ; FIXUP section size
-unary.wasm:	file format wasm 0x000001
+
+unary.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000015 func[0]:
+000016 func[0]:
  000017: 41 00                      | i32.const 0
  000019: 69                         | i32.popcnt
  00001a: 68                         | i32.ctz
@@ -129,4 +130,5 @@ Code Disassembly:
  00003f: 99                         | f64.abs
  000040: 9a                         | f64.neg
  000041: 1a                         | drop
+ 000042: 0b                         | end
 ;;; STDOUT ;;)

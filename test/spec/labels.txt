@@ -1,14 +1,14 @@
 ;;; TOOL: run-interp-spec
 ;;; STDIN_FILE: third_party/testsuite/labels.wast
 (;; STDOUT ;;;
-out/third_party/testsuite/labels.wast:298: assert_invalid passed:
-  error: type stack size too small at f32.neg. got 0, expected at least 1
-  error: @0x0000001e: on_unary_expr callback failed
-out/third_party/testsuite/labels.wast:302: assert_invalid passed:
-  error: type stack at end of block is 1, expected 0
-  error: @0x00000023: on_end_expr callback failed
-out/third_party/testsuite/labels.wast:306: assert_invalid passed:
-  error: type stack at end of block is 1, expected 0
-  error: @0x00000023: on_end_expr callback failed
-27/27 tests passed.
+out/test/spec/labels.wast:318: assert_invalid passed:
+  error: type mismatch in f32.neg, expected [f32] but got []
+  000001e: error: OnUnaryExpr callback failed
+out/test/spec/labels.wast:322: assert_invalid passed:
+  error: type mismatch in block, expected [] but got [f32]
+  0000023: error: OnEndExpr callback failed
+out/test/spec/labels.wast:326: assert_invalid passed:
+  error: type mismatch in block, expected [] but got [f32]
+  0000023: error: OnEndExpr callback failed
+28/28 tests passed.
 ;;; STDOUT ;;)

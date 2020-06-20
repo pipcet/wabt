@@ -17,30 +17,45 @@
 #ifndef WABT_COMMON_H_
 #define WABT_COMMON_H_
 
-#include <assert.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <algorithm>
+#include <cassert>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 #include "config.h"
 
+#include "src/make-unique.h"
+#include "src/result.h"
+#include "src/string-view.h"
+#include "src/type.h"
+
 #define WABT_FATAL(...) fprintf(stderr, __VA_ARGS__), exit(1)
 #define WABT_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-#define WABT_ZERO_MEMORY(var) memset(static_cast<void*>(&(var)), 0, sizeof(var))
+
 #define WABT_USE(x) static_cast<void>(x)
 
-#define WABT_UNKNOWN_OFFSET (static_cast<uint32_t>(~0))
 #define WABT_PAGE_SIZE 0x10000 /* 64k */
-#define WABT_MAX_PAGES 0x10000 /* # of pages that fit in 32-bit address space */
+#define WABT_MAX_PAGES 0x10000 /* # of pages that fit in 32-bit address space \
+                                */
 #define WABT_BYTES_TO_PAGES(x) ((x) >> 16)
 #define WABT_ALIGN_UP_TO_PAGE(x) \
   (((x) + WABT_PAGE_SIZE - 1) & ~(WABT_PAGE_SIZE - 1))
 
-#define PRIstringslice "%.*s"
-#define WABT_PRINTF_STRING_SLICE_ARG(x) static_cast<int>((x).length), (x).start
+#define PRIstringview "%.*s"
+#define WABT_PRINTF_STRING_VIEW_ARG(x) \
+  static_cast<int>((x).length()), (x).data()
+
+#define PRItypecode "%s%#x"
+#define WABT_PRINTF_TYPE_CODE(x) \
+  (static_cast<int32_t>(x) < 0 ? "-" : ""), std::abs(static_cast<int32_t>(x))
 
 #define WABT_DEFAULT_SNPRINTF_ALLOCA_BUFSIZE 128
 #define WABT_SNPRINTF_ALLOCA(buffer, len, format)                          \
@@ -61,15 +76,133 @@
 #define WABT_ENUM_COUNT(name) \
   (static_cast<int>(name::Last) - static_cast<int>(name::First) + 1)
 
-namespace wabt {
+#define WABT_DISALLOW_COPY_AND_ASSIGN(type) \
+  type(const type&) = delete;               \
+  type& operator=(const type&) = delete;
 
-enum class Result {
-  Ok,
-  Error,
+#if WITH_EXCEPTIONS
+#define WABT_TRY try {
+#define WABT_CATCH_BAD_ALLOC \
+  }                          \
+  catch (std::bad_alloc&) {  \
+  }
+#define WABT_CATCH_BAD_ALLOC_AND_EXIT           \
+  }                                             \
+  catch (std::bad_alloc&) {                     \
+    WABT_FATAL("Memory allocation failure.\n"); \
+  }
+#else
+#define WABT_TRY
+#define WABT_CATCH_BAD_ALLOC
+#define WABT_CATCH_BAD_ALLOC_AND_EXIT
+#endif
+
+#define PRIindex "u"
+#define PRIaddress "u"
+#define PRIoffset PRIzx
+
+struct v128 {
+  v128() = default;
+  v128(uint32_t x0, uint32_t x1, uint32_t x2, uint32_t x3) {
+    set_u32(0, x0);
+    set_u32(1, x1);
+    set_u32(2, x2);
+    set_u32(3, x3);
+  }
+
+  bool operator==(const v128& other) const {
+    return std::equal(std::begin(v), std::end(v), std::begin(other.v));
+  }
+  bool operator!=(const v128& other) const { return !(*this == other); }
+
+  uint8_t u8(int lane) const { return To<uint8_t>(lane); }
+  uint16_t u16(int lane) const { return To<uint16_t>(lane); }
+  uint32_t u32(int lane) const { return To<uint32_t>(lane); }
+  uint64_t u64(int lane) const { return To<uint64_t>(lane); }
+  uint32_t f32_bits(int lane) const { return To<uint32_t>(lane); }
+  uint64_t f64_bits(int lane) const { return To<uint64_t>(lane); }
+
+  void set_u8(int lane, uint8_t x) { return From<uint8_t>(lane, x); }
+  void set_u16(int lane, uint16_t x) { return From<uint16_t>(lane, x); }
+  void set_u32(int lane, uint32_t x) { return From<uint32_t>(lane, x); }
+  void set_u64(int lane, uint64_t x) { return From<uint64_t>(lane, x); }
+  void set_f32_bits(int lane, uint32_t x) { return From<uint32_t>(lane, x); }
+  void set_f64_bits(int lane, uint64_t x) { return From<uint64_t>(lane, x); }
+
+  bool is_zero() const {
+    return std::all_of(std::begin(v), std::end(v),
+                       [](uint8_t x) { return x == 0; });
+  }
+  void set_zero() { std::fill(std::begin(v), std::end(v), 0); }
+
+  template <typename T>
+  T To(int lane) const {
+    static_assert(sizeof(T) <= sizeof(v), "Invalid cast!");
+    assert((lane + 1) * sizeof(T) <= sizeof(v));
+    T result;
+    memcpy(&result, &v[lane * sizeof(T)], sizeof(result));
+    return result;
+  }
+
+  template <typename T>
+  void From(int lane, T data) {
+    static_assert(sizeof(T) <= sizeof(v), "Invalid cast!");
+    assert((lane + 1) * sizeof(T) <= sizeof(v));
+    memcpy(&v[lane * sizeof(T)], &data, sizeof(data));
+  }
+
+  uint8_t v[16];
 };
 
-#define WABT_SUCCEEDED(x) ((x) == Result::Ok)
-#define WABT_FAILED(x) ((x) == Result::Error)
+namespace wabt {
+
+typedef uint32_t Index;    // An index into one of the many index spaces.
+typedef uint32_t Address;  // An address or size in linear memory.
+typedef size_t Offset;     // An offset into a host's file or memory buffer.
+
+static const Address kInvalidAddress = ~0;
+static const Index kInvalidIndex = ~0;
+static const Offset kInvalidOffset = ~0;
+
+template <typename Dst, typename Src>
+Dst WABT_VECTORCALL Bitcast(Src&& value) {
+  static_assert(sizeof(Src) == sizeof(Dst), "Bitcast sizes must match.");
+  Dst result;
+  memcpy(&result, &value, sizeof(result));
+  return result;
+}
+
+template <typename T>
+void ZeroMemory(T& v) {
+  WABT_STATIC_ASSERT(std::is_pod<T>::value);
+  memset(&v, 0, sizeof(v));
+}
+
+// Placement construct
+template <typename T, typename... Args>
+void Construct(T& placement, Args&&... args) {
+  new (&placement) T(std::forward<Args>(args)...);
+}
+
+// Placement destruct
+template <typename T>
+void Destruct(T& placement) {
+  placement.~T();
+}
+
+inline std::string WABT_PRINTF_FORMAT(1, 2)
+    StringPrintf(const char* format, ...) {
+  va_list args;
+  va_list args_copy;
+  va_start(args, format);
+  va_copy(args_copy, args);
+  size_t len = wabt_vsnprintf(nullptr, 0, format, args) + 1;  // For \0.
+  std::vector<char> buffer(len);
+  va_end(args);
+  wabt_vsnprintf(buffer.data(), len, format, args_copy);
+  va_end(args_copy);
+  return std::string(buffer.data(), len - 1);
+}
 
 enum class LabelType {
   Func,
@@ -77,95 +210,135 @@ enum class LabelType {
   Loop,
   If,
   Else,
+  Try,
+  Catch,
 
   First = Func,
-  Last = Else,
+  Last = Catch,
 };
 static const int kLabelTypeCount = WABT_ENUM_COUNT(LabelType);
 
-struct StringSlice {
-  const char* start;
-  size_t length;
-};
-
 struct Location {
-  const char* filename;
-  int line;
-  int first_column;
-  int last_column;
+  enum class Type {
+    Text,
+    Binary,
+  };
+
+  Location() : line(0), first_column(0), last_column(0) {}
+  Location(string_view filename, int line, int first_column, int last_column)
+      : filename(filename),
+        line(line),
+        first_column(first_column),
+        last_column(last_column) {}
+  explicit Location(size_t offset) : offset(offset) {}
+
+  string_view filename;
+  union {
+    // For text files.
+    struct {
+      int line;
+      int first_column;
+      int last_column;
+    };
+    // For binary files.
+    struct {
+      size_t offset;
+    };
+  };
 };
 
-typedef void (*SourceErrorCallback)(const Location*,
-                                    const char* error,
-                                    const char* source_line,
-                                    size_t source_line_length,
-                                    size_t source_line_column_offset,
-                                    void* user_data);
-
-struct SourceErrorHandler {
-  SourceErrorCallback on_error;
-  /* on_error will be called with with source_line trimmed to this length */
-  size_t source_line_max_length;
-  void* user_data;
+enum class SegmentKind {
+  Active,
+  Passive,
+  Declared,
 };
 
-#define WABT_SOURCE_LINE_MAX_LENGTH_DEFAULT 80
-#define WABT_SOURCE_ERROR_HANDLER_DEFAULT                               \
-  {                                                                     \
-    default_source_error_callback, WABT_SOURCE_LINE_MAX_LENGTH_DEFAULT, \
-        nullptr                                                         \
-  }
-
-typedef void (*BinaryErrorCallback)(uint32_t offset,
-                                    const char* error,
-                                    void* user_data);
-
-struct BinaryErrorHandler {
-  BinaryErrorCallback on_error;
-  void* user_data;
+// Used in test asserts for special expected values "nan:canonical" and
+// "nan:arithmetic"
+enum class ExpectedNan {
+  None,
+  Canonical,
+  Arithmetic,
 };
 
-#define WABT_BINARY_ERROR_HANDLER_DEFAULT \
-  { default_binary_error_callback, nullptr }
+// Matches binary format, do not change.
+enum SegmentFlags : uint8_t {
+  SegFlagsNone = 0,
+  SegPassive = 1,        // bit 0: Is passive
+  SegExplicitIndex = 2,  // bit 1: Has explict index (Implies table 0 if absent)
+  SegDeclared = 3,       // Only used for declared segments
+  SegUseElemExprs = 4,   // bit 2: Is elemexpr (Or else index sequence)
 
-/* This data structure is not required; it is just used by the default error
- * handler callbacks. */
-enum class PrintErrorHeader {
-  Never,
-  Once,
-  Always,
-};
-
-struct DefaultErrorHandlerInfo {
-  const char* header;
-  FILE* out_file;
-  PrintErrorHeader print_header;
-};
-
-/* matches binary format, do not change */
-enum class Type {
-  I32 = -0x01,
-  I64 = -0x02,
-  F32 = -0x03,
-  F64 = -0x04,
-  Anyfunc = -0x10,
-  Func = -0x20,
-  Void = -0x40,
-  ___ = Void, /* convenient for the opcode table below */
-  Any = 0,    /* Not actually specified, but useful for type-checking */
+  SegFlagMax = (SegUseElemExprs << 1) - 1,  // All bits set.
 };
 
 enum class RelocType {
-  FuncIndexLeb = 0,   /* e.g. immediate of call instruction */
-  TableIndexSleb = 1, /* e.g. loading address of function */
-  TableIndexI32 = 2,  /* e.g. function address in DATA */
-  GlobalIndexLeb = 3, /* e.g immediate of get_global inst */
-  Data = 4,
+  FuncIndexLEB = 0,          // e.g. Immediate of call instruction
+  TableIndexSLEB = 1,        // e.g. Loading address of function
+  TableIndexI32 = 2,         // e.g. Function address in DATA
+  MemoryAddressLEB = 3,      // e.g. Memory address in load/store offset immediate
+  MemoryAddressSLEB = 4,     // e.g. Memory address in i32.const
+  MemoryAddressI32 = 5,      // e.g. Memory address in DATA
+  TypeIndexLEB = 6,          // e.g. Immediate type in call_indirect
+  GlobalIndexLEB = 7,        // e.g. Immediate of get_global inst
+  FunctionOffsetI32 = 8,     // e.g. Code offset in DWARF metadata
+  SectionOffsetI32 = 9,      // e.g. Section offset in DWARF metadata
+  EventIndexLEB = 10,        // Used in throw instructions
+  MemoryAddressRelSLEB = 11, // In PIC code, data address relative to __memory_base
+  TableIndexRelSLEB = 12,    // In PIC code, table index relative to __table_base
 
-  First = FuncIndexLeb,
-  Last = Data,
+  First = FuncIndexLEB,
+  Last = TableIndexRelSLEB,
 };
 static const int kRelocTypeCount = WABT_ENUM_COUNT(RelocType);
+
+struct Reloc {
+  Reloc(RelocType, size_t offset, Index index, int32_t addend = 0);
+
+  RelocType type;
+  size_t offset;
+  Index index;
+  int32_t addend;
+};
+
+enum class LinkingEntryType {
+  SegmentInfo = 5,
+  InitFunctions = 6,
+  ComdatInfo = 7,
+  SymbolTable = 8,
+};
+
+enum class SymbolType {
+  Function = 0,
+  Data = 1,
+  Global = 2,
+  Section = 3,
+  Event = 4,
+};
+
+enum class ComdatType {
+  Data = 0x0,
+  Function = 0x1,
+};
+
+#define WABT_SYMBOL_MASK_VISIBILITY 0x4
+#define WABT_SYMBOL_MASK_BINDING 0x3
+#define WABT_SYMBOL_FLAG_UNDEFINED 0x10
+#define WABT_SYMBOL_FLAG_EXPORTED 0x20
+#define WABT_SYMBOL_FLAG_EXPLICIT_NAME 0x40
+#define WABT_SYMBOL_FLAG_NO_STRIP 0x80
+#define WABT_SYMBOL_FLAG_MAX 0xff
+
+enum class SymbolVisibility {
+  Default = 0,
+  Hidden = 4,
+};
+
+enum class SymbolBinding {
+  Global = 0,
+  Weak = 1,
+  Local = 2,
+};
 
 /* matches binary format, do not change */
 enum class ExternalKind {
@@ -173,383 +346,89 @@ enum class ExternalKind {
   Table = 1,
   Memory = 2,
   Global = 3,
+  Event = 4,
 
   First = Func,
-  Last = Global,
+  Last = Event,
 };
 static const int kExternalKindCount = WABT_ENUM_COUNT(ExternalKind);
 
 struct Limits {
-  uint64_t initial;
-  uint64_t max;
-  bool has_max;
+  Limits() = default;
+  explicit Limits(uint64_t initial) : initial(initial) {}
+  Limits(uint64_t initial, uint64_t max)
+      : initial(initial), max(max), has_max(true) {}
+  Limits(uint64_t initial, uint64_t max, bool is_shared)
+      : initial(initial), max(max), has_max(true), is_shared(is_shared) {}
+
+  uint64_t initial = 0;
+  uint64_t max = 0;
+  bool has_max = false;
+  bool is_shared = false;
 };
 
 enum { WABT_USE_NATURAL_ALIGNMENT = 0xFFFFFFFF };
 
-/*
- *   tr: result type
- *   t1: type of the 1st parameter
- *   t2: type of the 2nd parameter
- *    m: memory size of the operation, if any
- * code: opcode
- * NAME: used to generate the opcode enum
- * text: a string of the opcode name in the AST format
- *
- *  tr  t1    t2   m  code  NAME text
- *  ============================ */
-#define WABT_FOREACH_OPCODE(V)                                        \
-  V(___, ___, ___, 0, 0x00, Unreachable, "unreachable")               \
-  V(___, ___, ___, 0, 0x01, Nop, "nop")                               \
-  V(___, ___, ___, 0, 0x02, Block, "block")                           \
-  V(___, ___, ___, 0, 0x03, Loop, "loop")                             \
-  V(___, ___, ___, 0, 0x04, If, "if")                                 \
-  V(___, ___, ___, 0, 0x05, Else, "else")                             \
-  V(___, ___, ___, 0, 0x0b, End, "end")                               \
-  V(___, ___, ___, 0, 0x0c, Br, "br")                                 \
-  V(___, ___, ___, 0, 0x0d, BrIf, "br_if")                            \
-  V(___, ___, ___, 0, 0x0e, BrTable, "br_table")                      \
-  V(___, ___, ___, 0, 0x0f, Return, "return")                         \
-  V(___, ___, ___, 0, 0x10, Call, "call")                             \
-  V(___, ___, ___, 0, 0x11, CallIndirect, "call_indirect")            \
-  V(___, ___, ___, 0, 0x1a, Drop, "drop")                             \
-  V(___, ___, ___, 0, 0x1b, Select, "select")                         \
-  V(___, ___, ___, 0, 0x20, GetLocal, "get_local")                    \
-  V(___, ___, ___, 0, 0x21, SetLocal, "set_local")                    \
-  V(___, ___, ___, 0, 0x22, TeeLocal, "tee_local")                    \
-  V(___, ___, ___, 0, 0x23, GetGlobal, "get_global")                  \
-  V(___, ___, ___, 0, 0x24, SetGlobal, "set_global")                  \
-  V(I32, I32, ___, 4, 0x28, I32Load, "i32.load")                      \
-  V(I64, I32, ___, 8, 0x29, I64Load, "i64.load")                      \
-  V(F32, I32, ___, 4, 0x2a, F32Load, "f32.load")                      \
-  V(F64, I32, ___, 8, 0x2b, F64Load, "f64.load")                      \
-  V(I32, I32, ___, 1, 0x2c, I32Load8S, "i32.load8_s")                 \
-  V(I32, I32, ___, 1, 0x2d, I32Load8U, "i32.load8_u")                 \
-  V(I32, I32, ___, 2, 0x2e, I32Load16S, "i32.load16_s")               \
-  V(I32, I32, ___, 2, 0x2f, I32Load16U, "i32.load16_u")               \
-  V(I64, I32, ___, 1, 0x30, I64Load8S, "i64.load8_s")                 \
-  V(I64, I32, ___, 1, 0x31, I64Load8U, "i64.load8_u")                 \
-  V(I64, I32, ___, 2, 0x32, I64Load16S, "i64.load16_s")               \
-  V(I64, I32, ___, 2, 0x33, I64Load16U, "i64.load16_u")               \
-  V(I64, I32, ___, 4, 0x34, I64Load32S, "i64.load32_s")               \
-  V(I64, I32, ___, 4, 0x35, I64Load32U, "i64.load32_u")               \
-  V(___, I32, I32, 4, 0x36, I32Store, "i32.store")                    \
-  V(___, I32, I64, 8, 0x37, I64Store, "i64.store")                    \
-  V(___, I32, F32, 4, 0x38, F32Store, "f32.store")                    \
-  V(___, I32, F64, 8, 0x39, F64Store, "f64.store")                    \
-  V(___, I32, I32, 1, 0x3a, I32Store8, "i32.store8")                  \
-  V(___, I32, I32, 2, 0x3b, I32Store16, "i32.store16")                \
-  V(___, I32, I64, 1, 0x3c, I64Store8, "i64.store8")                  \
-  V(___, I32, I64, 2, 0x3d, I64Store16, "i64.store16")                \
-  V(___, I32, I64, 4, 0x3e, I64Store32, "i64.store32")                \
-  V(I32, ___, ___, 0, 0x3f, CurrentMemory, "current_memory")          \
-  V(I32, I32, ___, 0, 0x40, GrowMemory, "grow_memory")                \
-  V(I32, ___, ___, 0, 0x41, I32Const, "i32.const")                    \
-  V(I64, ___, ___, 0, 0x42, I64Const, "i64.const")                    \
-  V(F32, ___, ___, 0, 0x43, F32Const, "f32.const")                    \
-  V(F64, ___, ___, 0, 0x44, F64Const, "f64.const")                    \
-  V(I32, I32, ___, 0, 0x45, I32Eqz, "i32.eqz")                        \
-  V(I32, I32, I32, 0, 0x46, I32Eq, "i32.eq")                          \
-  V(I32, I32, I32, 0, 0x47, I32Ne, "i32.ne")                          \
-  V(I32, I32, I32, 0, 0x48, I32LtS, "i32.lt_s")                       \
-  V(I32, I32, I32, 0, 0x49, I32LtU, "i32.lt_u")                       \
-  V(I32, I32, I32, 0, 0x4a, I32GtS, "i32.gt_s")                       \
-  V(I32, I32, I32, 0, 0x4b, I32GtU, "i32.gt_u")                       \
-  V(I32, I32, I32, 0, 0x4c, I32LeS, "i32.le_s")                       \
-  V(I32, I32, I32, 0, 0x4d, I32LeU, "i32.le_u")                       \
-  V(I32, I32, I32, 0, 0x4e, I32GeS, "i32.ge_s")                       \
-  V(I32, I32, I32, 0, 0x4f, I32GeU, "i32.ge_u")                       \
-  V(I32, I64, ___, 0, 0x50, I64Eqz, "i64.eqz")                        \
-  V(I32, I64, I64, 0, 0x51, I64Eq, "i64.eq")                          \
-  V(I32, I64, I64, 0, 0x52, I64Ne, "i64.ne")                          \
-  V(I32, I64, I64, 0, 0x53, I64LtS, "i64.lt_s")                       \
-  V(I32, I64, I64, 0, 0x54, I64LtU, "i64.lt_u")                       \
-  V(I32, I64, I64, 0, 0x55, I64GtS, "i64.gt_s")                       \
-  V(I32, I64, I64, 0, 0x56, I64GtU, "i64.gt_u")                       \
-  V(I32, I64, I64, 0, 0x57, I64LeS, "i64.le_s")                       \
-  V(I32, I64, I64, 0, 0x58, I64LeU, "i64.le_u")                       \
-  V(I32, I64, I64, 0, 0x59, I64GeS, "i64.ge_s")                       \
-  V(I32, I64, I64, 0, 0x5a, I64GeU, "i64.ge_u")                       \
-  V(I32, F32, F32, 0, 0x5b, F32Eq, "f32.eq")                          \
-  V(I32, F32, F32, 0, 0x5c, F32Ne, "f32.ne")                          \
-  V(I32, F32, F32, 0, 0x5d, F32Lt, "f32.lt")                          \
-  V(I32, F32, F32, 0, 0x5e, F32Gt, "f32.gt")                          \
-  V(I32, F32, F32, 0, 0x5f, F32Le, "f32.le")                          \
-  V(I32, F32, F32, 0, 0x60, F32Ge, "f32.ge")                          \
-  V(I32, F64, F64, 0, 0x61, F64Eq, "f64.eq")                          \
-  V(I32, F64, F64, 0, 0x62, F64Ne, "f64.ne")                          \
-  V(I32, F64, F64, 0, 0x63, F64Lt, "f64.lt")                          \
-  V(I32, F64, F64, 0, 0x64, F64Gt, "f64.gt")                          \
-  V(I32, F64, F64, 0, 0x65, F64Le, "f64.le")                          \
-  V(I32, F64, F64, 0, 0x66, F64Ge, "f64.ge")                          \
-  V(I32, I32, ___, 0, 0x67, I32Clz, "i32.clz")                        \
-  V(I32, I32, ___, 0, 0x68, I32Ctz, "i32.ctz")                        \
-  V(I32, I32, ___, 0, 0x69, I32Popcnt, "i32.popcnt")                  \
-  V(I32, I32, I32, 0, 0x6a, I32Add, "i32.add")                        \
-  V(I32, I32, I32, 0, 0x6b, I32Sub, "i32.sub")                        \
-  V(I32, I32, I32, 0, 0x6c, I32Mul, "i32.mul")                        \
-  V(I32, I32, I32, 0, 0x6d, I32DivS, "i32.div_s")                     \
-  V(I32, I32, I32, 0, 0x6e, I32DivU, "i32.div_u")                     \
-  V(I32, I32, I32, 0, 0x6f, I32RemS, "i32.rem_s")                     \
-  V(I32, I32, I32, 0, 0x70, I32RemU, "i32.rem_u")                     \
-  V(I32, I32, I32, 0, 0x71, I32And, "i32.and")                        \
-  V(I32, I32, I32, 0, 0x72, I32Or, "i32.or")                          \
-  V(I32, I32, I32, 0, 0x73, I32Xor, "i32.xor")                        \
-  V(I32, I32, I32, 0, 0x74, I32Shl, "i32.shl")                        \
-  V(I32, I32, I32, 0, 0x75, I32ShrS, "i32.shr_s")                     \
-  V(I32, I32, I32, 0, 0x76, I32ShrU, "i32.shr_u")                     \
-  V(I32, I32, I32, 0, 0x77, I32Rotl, "i32.rotl")                      \
-  V(I32, I32, I32, 0, 0x78, I32Rotr, "i32.rotr")                      \
-  V(I64, I64, I64, 0, 0x79, I64Clz, "i64.clz")                        \
-  V(I64, I64, I64, 0, 0x7a, I64Ctz, "i64.ctz")                        \
-  V(I64, I64, I64, 0, 0x7b, I64Popcnt, "i64.popcnt")                  \
-  V(I64, I64, I64, 0, 0x7c, I64Add, "i64.add")                        \
-  V(I64, I64, I64, 0, 0x7d, I64Sub, "i64.sub")                        \
-  V(I64, I64, I64, 0, 0x7e, I64Mul, "i64.mul")                        \
-  V(I64, I64, I64, 0, 0x7f, I64DivS, "i64.div_s")                     \
-  V(I64, I64, I64, 0, 0x80, I64DivU, "i64.div_u")                     \
-  V(I64, I64, I64, 0, 0x81, I64RemS, "i64.rem_s")                     \
-  V(I64, I64, I64, 0, 0x82, I64RemU, "i64.rem_u")                     \
-  V(I64, I64, I64, 0, 0x83, I64And, "i64.and")                        \
-  V(I64, I64, I64, 0, 0x84, I64Or, "i64.or")                          \
-  V(I64, I64, I64, 0, 0x85, I64Xor, "i64.xor")                        \
-  V(I64, I64, I64, 0, 0x86, I64Shl, "i64.shl")                        \
-  V(I64, I64, I64, 0, 0x87, I64ShrS, "i64.shr_s")                     \
-  V(I64, I64, I64, 0, 0x88, I64ShrU, "i64.shr_u")                     \
-  V(I64, I64, I64, 0, 0x89, I64Rotl, "i64.rotl")                      \
-  V(I64, I64, I64, 0, 0x8a, I64Rotr, "i64.rotr")                      \
-  V(F32, F32, F32, 0, 0x8b, F32Abs, "f32.abs")                        \
-  V(F32, F32, F32, 0, 0x8c, F32Neg, "f32.neg")                        \
-  V(F32, F32, F32, 0, 0x8d, F32Ceil, "f32.ceil")                      \
-  V(F32, F32, F32, 0, 0x8e, F32Floor, "f32.floor")                    \
-  V(F32, F32, F32, 0, 0x8f, F32Trunc, "f32.trunc")                    \
-  V(F32, F32, F32, 0, 0x90, F32Nearest, "f32.nearest")                \
-  V(F32, F32, F32, 0, 0x91, F32Sqrt, "f32.sqrt")                      \
-  V(F32, F32, F32, 0, 0x92, F32Add, "f32.add")                        \
-  V(F32, F32, F32, 0, 0x93, F32Sub, "f32.sub")                        \
-  V(F32, F32, F32, 0, 0x94, F32Mul, "f32.mul")                        \
-  V(F32, F32, F32, 0, 0x95, F32Div, "f32.div")                        \
-  V(F32, F32, F32, 0, 0x96, F32Min, "f32.min")                        \
-  V(F32, F32, F32, 0, 0x97, F32Max, "f32.max")                        \
-  V(F32, F32, F32, 0, 0x98, F32Copysign, "f32.copysign")              \
-  V(F64, F64, F64, 0, 0x99, F64Abs, "f64.abs")                        \
-  V(F64, F64, F64, 0, 0x9a, F64Neg, "f64.neg")                        \
-  V(F64, F64, F64, 0, 0x9b, F64Ceil, "f64.ceil")                      \
-  V(F64, F64, F64, 0, 0x9c, F64Floor, "f64.floor")                    \
-  V(F64, F64, F64, 0, 0x9d, F64Trunc, "f64.trunc")                    \
-  V(F64, F64, F64, 0, 0x9e, F64Nearest, "f64.nearest")                \
-  V(F64, F64, F64, 0, 0x9f, F64Sqrt, "f64.sqrt")                      \
-  V(F64, F64, F64, 0, 0xa0, F64Add, "f64.add")                        \
-  V(F64, F64, F64, 0, 0xa1, F64Sub, "f64.sub")                        \
-  V(F64, F64, F64, 0, 0xa2, F64Mul, "f64.mul")                        \
-  V(F64, F64, F64, 0, 0xa3, F64Div, "f64.div")                        \
-  V(F64, F64, F64, 0, 0xa4, F64Min, "f64.min")                        \
-  V(F64, F64, F64, 0, 0xa5, F64Max, "f64.max")                        \
-  V(F64, F64, F64, 0, 0xa6, F64Copysign, "f64.copysign")              \
-  V(I32, I64, ___, 0, 0xa7, I32WrapI64, "i32.wrap/i64")               \
-  V(I32, F32, ___, 0, 0xa8, I32TruncSF32, "i32.trunc_s/f32")          \
-  V(I32, F32, ___, 0, 0xa9, I32TruncUF32, "i32.trunc_u/f32")          \
-  V(I32, F64, ___, 0, 0xaa, I32TruncSF64, "i32.trunc_s/f64")          \
-  V(I32, F64, ___, 0, 0xab, I32TruncUF64, "i32.trunc_u/f64")          \
-  V(I64, I32, ___, 0, 0xac, I64ExtendSI32, "i64.extend_s/i32")        \
-  V(I64, I32, ___, 0, 0xad, I64ExtendUI32, "i64.extend_u/i32")        \
-  V(I64, F32, ___, 0, 0xae, I64TruncSF32, "i64.trunc_s/f32")          \
-  V(I64, F32, ___, 0, 0xaf, I64TruncUF32, "i64.trunc_u/f32")          \
-  V(I64, F64, ___, 0, 0xb0, I64TruncSF64, "i64.trunc_s/f64")          \
-  V(I64, F64, ___, 0, 0xb1, I64TruncUF64, "i64.trunc_u/f64")          \
-  V(F32, I32, ___, 0, 0xb2, F32ConvertSI32, "f32.convert_s/i32")      \
-  V(F32, I32, ___, 0, 0xb3, F32ConvertUI32, "f32.convert_u/i32")      \
-  V(F32, I64, ___, 0, 0xb4, F32ConvertSI64, "f32.convert_s/i64")      \
-  V(F32, I64, ___, 0, 0xb5, F32ConvertUI64, "f32.convert_u/i64")      \
-  V(F32, F64, ___, 0, 0xb6, F32DemoteF64, "f32.demote/f64")           \
-  V(F64, I32, ___, 0, 0xb7, F64ConvertSI32, "f64.convert_s/i32")      \
-  V(F64, I32, ___, 0, 0xb8, F64ConvertUI32, "f64.convert_u/i32")      \
-  V(F64, I64, ___, 0, 0xb9, F64ConvertSI64, "f64.convert_s/i64")      \
-  V(F64, I64, ___, 0, 0xba, F64ConvertUI64, "f64.convert_u/i64")      \
-  V(F64, F32, ___, 0, 0xbb, F64PromoteF32, "f64.promote/f32")         \
-  V(I32, F32, ___, 0, 0xbc, I32ReinterpretF32, "i32.reinterpret/f32") \
-  V(I64, F64, ___, 0, 0xbd, I64ReinterpretF64, "i64.reinterpret/f64") \
-  V(F32, I32, ___, 0, 0xbe, F32ReinterpretI32, "f32.reinterpret/i32") \
-  V(F64, I64, ___, 0, 0xbf, F64ReinterpretI64, "f64.reinterpret/i64")
+Result ReadFile(string_view filename, std::vector<uint8_t>* out_data);
 
-enum class Opcode {
-#define V(rtype, type1, type2, mem_size, code, Name, text) Name = code,
-  WABT_FOREACH_OPCODE(V)
-#undef V
-
-      First = Unreachable,
-  Last = F64ReinterpretI64,
-};
-static const int kOpcodeCount = WABT_ENUM_COUNT(Opcode);
-
-struct OpcodeInfo {
-  const char* name;
-  Type result_type;
-  Type param1_type;
-  Type param2_type;
-  int memory_size;
-};
-
-enum class LiteralType {
-  Int,
-  Float,
-  Hexfloat,
-  Infinity,
-  Nan,
-};
-
-struct Literal {
-  LiteralType type;
-  StringSlice text;
-};
-
-static WABT_INLINE void* wabt_alloc(size_t size) {
-  return malloc(size);
-}
-
-static WABT_INLINE void* wabt_alloc_zero(size_t size) {
-  return calloc(size, 1);
-}
-
-static WABT_INLINE void* wabt_realloc(void* p, size_t size) {
-  /* Realloc normally frees if size is 0, but we don't want that behavior. */
-  if (size == 0)
-    return p;
-  return realloc(p, size);
-}
-
-static WABT_INLINE void wabt_free(void* p) {
-  free(p);
-}
-
-static WABT_INLINE char* wabt_strndup(const char* s, size_t len) {
-  size_t real_len = 0;
-  const char* p = s;
-  while (real_len < len && *p) {
-    p++;
-    real_len++;
-  }
-
-  char* new_s = static_cast<char*>(wabt_alloc(real_len + 1));
-  memcpy(new_s, s, real_len);
-  new_s[real_len] = 0;
-  return new_s;
-}
-
-static WABT_INLINE StringSlice dup_string_slice(StringSlice str) {
-  StringSlice result;
-  result.start = wabt_strndup(str.start, str.length);
-  result.length = str.length;
-  return result;
-}
-
-/* return 1 if |alignment| matches the alignment of |opcode|, or if |alignment|
- * is WABT_USE_NATURAL_ALIGNMENT */
-bool is_naturally_aligned(Opcode opcode, uint32_t alignment);
-
-/* if |alignment| is WABT_USE_NATURAL_ALIGNMENT, return the alignment of
- * |opcode|, else return |alignment| */
-uint32_t get_opcode_alignment(Opcode opcode, uint32_t alignment);
-
-StringSlice empty_string_slice(void);
-bool string_slice_eq_cstr(const StringSlice* s1, const char* s2);
-bool string_slice_startswith(const StringSlice* s1, const char* s2);
-StringSlice string_slice_from_cstr(const char* string);
-bool string_slice_is_empty(const StringSlice*);
-bool string_slices_are_equal(const StringSlice*, const StringSlice*);
-void destroy_string_slice(StringSlice*);
-Result read_file(const char* filename, void** out_data, size_t* out_size);
-
-void default_source_error_callback(const Location*,
-                                   const char* error,
-                                   const char* source_line,
-                                   size_t source_line_length,
-                                   size_t source_line_column_offset,
-                                   void* user_data);
-
-void default_binary_error_callback(uint32_t offset,
-                                   const char* error,
-                                   void* user_data);
-
-void init_stdio();
-
-/* opcode info */
-extern OpcodeInfo g_opcode_info[];
-void init_opcode_info(void);
-
-static WABT_INLINE const char* get_opcode_name(Opcode opcode) {
-  assert(static_cast<int>(opcode) < kOpcodeCount);
-  init_opcode_info();
-  return g_opcode_info[static_cast<size_t>(opcode)].name;
-}
-
-static WABT_INLINE Type get_opcode_result_type(Opcode opcode) {
-  assert(static_cast<int>(opcode) < kOpcodeCount);
-  init_opcode_info();
-  return g_opcode_info[static_cast<size_t>(opcode)].result_type;
-}
-
-static WABT_INLINE Type get_opcode_param_type_1(Opcode opcode) {
-  assert(static_cast<int>(opcode) < kOpcodeCount);
-  init_opcode_info();
-  return g_opcode_info[static_cast<size_t>(opcode)].param1_type;
-}
-
-static WABT_INLINE Type get_opcode_param_type_2(Opcode opcode) {
-  assert(static_cast<int>(opcode) < kOpcodeCount);
-  init_opcode_info();
-  return g_opcode_info[static_cast<size_t>(opcode)].param2_type;
-}
-
-static WABT_INLINE int get_opcode_memory_size(Opcode opcode) {
-  assert(static_cast<int>(opcode) < kOpcodeCount);
-  init_opcode_info();
-  return g_opcode_info[static_cast<size_t>(opcode)].memory_size;
-}
+void InitStdio();
 
 /* external kind */
 
 extern const char* g_kind_name[];
 
-static WABT_INLINE const char* get_kind_name(ExternalKind kind) {
-  assert(static_cast<int>(kind) < kExternalKindCount);
-  return g_kind_name[static_cast<size_t>(kind)];
+static WABT_INLINE const char* GetKindName(ExternalKind kind) {
+  return static_cast<int>(kind) < kExternalKindCount
+    ? g_kind_name[static_cast<size_t>(kind)]
+    : "<error_kind>";
 }
 
 /* reloc */
 
 extern const char* g_reloc_type_name[];
 
-static WABT_INLINE const char* get_reloc_type_name(RelocType reloc) {
-  assert(static_cast<int>(reloc) < kRelocTypeCount);
-  return g_reloc_type_name[static_cast<size_t>(reloc)];
+static WABT_INLINE const char* GetRelocTypeName(RelocType reloc) {
+  return static_cast<int>(reloc) < kRelocTypeCount
+    ? g_reloc_type_name[static_cast<size_t>(reloc)]
+    : "<error_reloc_type>";
 }
 
-/* type */
+/* symbol */
 
-static WABT_INLINE const char* get_type_name(Type type) {
+static WABT_INLINE const char* GetSymbolTypeName(SymbolType type) {
   switch (type) {
-    case Type::I32:
-      return "i32";
-    case Type::I64:
-      return "i64";
-    case Type::F32:
-      return "f32";
-    case Type::F64:
-      return "f64";
-    case Type::Anyfunc:
-      return "anyfunc";
-    case Type::Func:
+    case SymbolType::Function:
       return "func";
-    case Type::Void:
-      return "void";
-    case Type::Any:
-      return "any";
+    case SymbolType::Global:
+      return "global";
+    case SymbolType::Data:
+      return "data";
+    case SymbolType::Section:
+      return "section";
+    case SymbolType::Event:
+      return "event";
     default:
-      return nullptr;
+      return "<error_symbol_type>";
   }
 }
 
-}  // namespace
+template <typename T>
+void ConvertBackslashToSlash(T begin, T end) {
+  std::replace(begin, end, '\\', '/');
+}
 
-#endif /* WABT_COMMON_H_ */
+inline void ConvertBackslashToSlash(char* s, size_t length) {
+  ConvertBackslashToSlash(s, s + length);
+}
+
+inline void ConvertBackslashToSlash(char* s) {
+  ConvertBackslashToSlash(s, strlen(s));
+}
+
+inline void ConvertBackslashToSlash(std::string* s) {
+  ConvertBackslashToSlash(s->begin(), s->end());
+}
+
+}  // namespace wabt
+
+#endif  // WABT_COMMON_H_

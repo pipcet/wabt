@@ -1,5 +1,6 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: --headers -v --debug-names --dump-verbose
+;;; TOOL: run-objdump
+;;; ARGS0: -v --debug-names
+;;; ARGS1: --headers -x
 (module
   (import "bar" "foo" (func $foo)))
 (;; STDOUT ;;;
@@ -27,32 +28,42 @@
 000001a: 00                                        ; import signature index
 000000f: 0b                                        ; FIXUP section size
 ; section "name"
-000001b: 00                                        ; custom section code
+000001b: 00                                        ; section code
 000001c: 00                                        ; section size (guess)
 000001d: 04                                        ; string length
 000001e: 6e61 6d65                                name  ; custom section name
-0000022: 01                                        ; num functions
-0000023: 04                                        ; string length
-0000024: 2466 6f6f                                $foo  ; func name 0
-0000028: 00                                        ; num locals
-000001c: 0c                                        ; FIXUP section size
-debug-import-names.wasm:	file format wasm 0x000001
+0000022: 01                                        ; function name type
+0000023: 00                                        ; subsection size (guess)
+0000024: 01                                        ; num functions
+0000025: 00                                        ; function index
+0000026: 03                                        ; string length
+0000027: 666f 6f                                  foo  ; func name 0
+0000023: 06                                        ; FIXUP subsection size
+000002a: 02                                        ; local name type
+000002b: 00                                        ; subsection size (guess)
+000002c: 01                                        ; num functions
+000002d: 00                                        ; function index
+000002e: 00                                        ; num locals
+000002b: 03                                        ; FIXUP subsection size
+000001c: 12                                        ; FIXUP section size
+
+debug-import-names.wasm:	file format wasm 0x1
 
 Sections:
 
      Type start=0x0000000a end=0x0000000e (size=0x00000004) count: 1
    Import start=0x00000010 end=0x0000001b (size=0x0000000b) count: 1
-   Custom start=0x0000001d end=0x00000029 (size=0x0000000c) "name"
+   Custom start=0x0000001d end=0x0000002f (size=0x00000012) "name"
 
 Section Details:
 
-Type:
- - [0] () -> nil
-Import:
- - func[0] sig=0 <- bar.foo
+Type[1]:
+ - type[0] () -> nil
+Import[1]:
+ - func[0] sig=0 <foo> <- bar.foo
 Custom:
  - name: "name"
- - func[0] $foo
+ - func[0] <foo>
 
 Code Disassembly:
 

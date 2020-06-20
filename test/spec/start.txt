@@ -1,20 +1,25 @@
 ;;; TOOL: run-interp-spec
 ;;; STDIN_FILE: third_party/testsuite/start.wast
 (;; STDOUT ;;;
-out/third_party/testsuite/start.wast:2: assert_invalid passed:
-  error: @0x00000015: invalid start function index
-out/third_party/testsuite/start.wast:7: assert_invalid passed:
+out/test/spec/start.wast:2: assert_invalid passed:
+  0000000: error: function variable out of range: 1 (max 1)
+  0000015: error: OnStartFunction callback failed
+out/test/spec/start.wast:7: assert_invalid passed:
   error: start function must not return anything
-  error: @0x00000016: on_start_function callback failed
-out/third_party/testsuite/start.wast:14: assert_invalid passed:
+  0000016: error: OnStartFunction callback failed
+out/test/spec/start.wast:14: assert_invalid passed:
   error: start function must be nullary
-  error: @0x00000016: on_start_function callback failed
+  0000016: error: OnStartFunction callback failed
 inc() =>
 inc() =>
 inc() =>
 inc() =>
-called host spectest.print(i32:1) =>
-called host spectest.print(i32:2) =>
+called host spectest.print_i32(i32:1) =>
+called host spectest.print_i32(i32:2) =>
 called host spectest.print() =>
-14/14 tests passed.
+out/test/spec/start.wast:103: assert_malformed passed:
+  out/test/spec/start/start.9.wat:1:69: error: multiple start sections
+  (module (func $a (unreachable)) (func $b (unreachable)) (start $a) (start $b))
+                                                                      ^^^^^
+15/15 tests passed.
 ;;; STDOUT ;;)

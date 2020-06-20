@@ -14,154 +14,277 @@
  * limitations under the License.
  */
 
-#include "binary-reader-opcnt.h"
+#include "src/binary-reader-opcnt.h"
 
-#include <assert.h>
-#include <inttypes.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <cassert>
+#include <cinttypes>
+#include <cstdarg>
+#include <cstdint>
+#include <cstdio>
 
-#include "binary-reader.h"
-#include "common.h"
+#include "src/binary-reader-nop.h"
+#include "src/common.h"
+#include "src/literal.h"
+#include "src/stream.h"
 
 namespace wabt {
 
-struct Context {
-  OpcntData* opcnt_data;
+OpcodeInfo::OpcodeInfo(Opcode opcode, Kind kind)
+    : opcode_(opcode), kind_(kind) {}
+
+template <typename T>
+OpcodeInfo::OpcodeInfo(Opcode opcode, Kind kind, T* data, size_t count)
+    : OpcodeInfo(opcode, kind) {
+  if (count > 0) {
+    data_.resize(sizeof(T) * count);
+    memcpy(data_.data(), data, data_.size());
+  }
+}
+
+template <typename T>
+OpcodeInfo::OpcodeInfo(Opcode opcode, Kind kind, T* data, size_t count, T extra)
+    : OpcodeInfo(opcode, kind, data, count) {
+  data_.resize(data_.size() + sizeof(T));
+  memcpy(data_.data() + data_.size() - sizeof(T), &extra, sizeof(T));
+}
+
+template <typename T>
+std::pair<const T*, size_t> OpcodeInfo::GetDataArray() const {
+  if (data_.empty()) {
+    return std::pair<const T*, size_t>(nullptr, 0);
+  }
+
+  assert(data_.size() % sizeof(T) == 0);
+  return std::make_pair(reinterpret_cast<const T*>(data_.data()),
+                        data_.size() / sizeof(T));
+}
+
+template <typename T>
+const T* OpcodeInfo::GetData(size_t expected_size) const {
+  auto pair = GetDataArray<T>();
+  assert(pair.second == expected_size);
+  return pair.first;
+}
+
+template <typename T, typename F>
+void OpcodeInfo::WriteArray(Stream& stream, F&& write_func) {
+  auto pair = GetDataArray<T>();
+  for (size_t i = 0; i < pair.second; ++i) {
+    // Write an initial space (to separate from the opcode name) first, then
+    // comma-separate.
+    stream.Writef("%s", i == 0 ? " " : ", ");
+    write_func(pair.first[i]);
+  }
+}
+
+void OpcodeInfo::Write(Stream& stream) {
+  stream.Writef("%s", opcode_.GetName());
+
+  switch (kind_) {
+    case Kind::Bare:
+      break;
+
+    case Kind::Uint32:
+      stream.Writef(" %u (0x%x)", *GetData<uint32_t>(), *GetData<uint32_t>());
+      break;
+
+    case Kind::Uint64:
+      stream.Writef(" %" PRIu64 " (0x%" PRIx64 ")", *GetData<uint64_t>(),
+                    *GetData<uint64_t>());
+      break;
+
+    case Kind::Index:
+      stream.Writef(" %" PRIindex, *GetData<Index>());
+      break;
+
+    case Kind::Float32: {
+      stream.Writef(" %g", *GetData<float>());
+      char buffer[WABT_MAX_FLOAT_HEX + 1];
+      WriteFloatHex(buffer, sizeof(buffer), *GetData<uint32_t>());
+      stream.Writef(" (%s)", buffer);
+      break;
+    }
+
+    case Kind::Float64: {
+      stream.Writef(" %g", *GetData<double>());
+      char buffer[WABT_MAX_DOUBLE_HEX + 1];
+      WriteDoubleHex(buffer, sizeof(buffer), *GetData<uint64_t>());
+      stream.Writef(" (%s)", buffer);
+      break;
+    }
+
+    case Kind::Uint32Uint32:
+      WriteArray<uint32_t>(
+          stream, [&stream](uint32_t value) { stream.Writef("%u", value); });
+      break;
+
+    case Kind::BlockSig: {
+      auto type = *GetData<Type>();
+      if (type.IsIndex()) {
+        stream.Writef(" type:%d", type.GetIndex());
+      } else if (type != Type::Void) {
+        stream.Writef(" %s", type.GetName());
+      }
+      break;
+    }
+
+    case Kind::BrTable: {
+      WriteArray<Index>(stream, [&stream](Index index) {
+        stream.Writef("%" PRIindex, index);
+      });
+      break;
+    }
+  }
+}
+
+bool operator==(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  return lhs.opcode_ == rhs.opcode_ && lhs.kind_ == rhs.kind_ &&
+         lhs.data_ == rhs.data_;
+}
+
+bool operator!=(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  return !(lhs == rhs);
+}
+
+bool operator<(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  if (lhs.opcode_ < rhs.opcode_) {
+    return true;
+  }
+  if (lhs.opcode_ > rhs.opcode_) {
+    return false;
+  }
+  if (lhs.kind_ < rhs.kind_) {
+    return true;
+  }
+  if (lhs.kind_ > rhs.kind_) {
+    return false;
+  }
+  if (lhs.data_ < rhs.data_) {
+    return true;
+  }
+  if (lhs.data_ > rhs.data_) {
+    return false;
+  }
+  return false;
+}
+
+bool operator<=(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  return lhs < rhs || lhs == rhs;
+}
+
+bool operator>(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  return !(lhs <= rhs);
+}
+
+bool operator>=(const OpcodeInfo& lhs, const OpcodeInfo& rhs) {
+  return !(lhs < rhs);
+}
+
+namespace {
+
+class BinaryReaderOpcnt : public BinaryReaderNop {
+ public:
+  explicit BinaryReaderOpcnt(OpcodeInfoCounts* counts);
+
+  Result OnOpcode(Opcode opcode) override;
+  Result OnOpcodeBare() override;
+  Result OnOpcodeUint32(uint32_t value) override;
+  Result OnOpcodeIndex(Index value) override;
+  Result OnOpcodeUint32Uint32(uint32_t value, uint32_t value2) override;
+  Result OnOpcodeUint64(uint64_t value) override;
+  Result OnOpcodeF32(uint32_t value) override;
+  Result OnOpcodeF64(uint64_t value) override;
+  Result OnOpcodeBlockSig(Type sig_type) override;
+  Result OnBrTableExpr(Index num_targets,
+                       Index* target_depths,
+                       Index default_target_depth) override;
+  Result OnEndExpr() override;
+  Result OnEndFunc() override;
+
+ private:
+  template <typename... Args>
+  Result Emplace(Args&&... args);
+
+  OpcodeInfoCounts* opcode_counts_;
+  Opcode current_opcode_;
 };
 
-static Result add_int_counter_value(IntCounterVector* vec,
-                                        intmax_t value) {
-  size_t i;
-  for (i = 0; i < vec->size; ++i) {
-    if (vec->data[i].value == value) {
-      ++vec->data[i].count;
-      return Result::Ok;
-    }
-  }
-  IntCounter counter;
-  counter.value = value;
-  counter.count = 1;
-  append_int_counter_value(vec, &counter);
+template <typename... Args>
+Result BinaryReaderOpcnt::Emplace(Args&&... args) {
+  auto pair = opcode_counts_->emplace(
+      std::piecewise_construct, std::make_tuple(std::forward<Args>(args)...),
+      std::make_tuple(0));
+
+  auto& count = pair.first->second;
+  count++;
   return Result::Ok;
 }
 
-static Result add_int_pair_counter_value(IntPairCounterVector* vec,
-                                             intmax_t first,
-                                             intmax_t second) {
-  size_t i;
-  for (i = 0; i < vec->size; ++i) {
-    if (vec->data[i].first == first && vec->data[i].second == second) {
-      ++vec->data[i].count;
-      return Result::Ok;
-    }
-  }
-  IntPairCounter counter;
-  counter.first = first;
-  counter.second = second;
-  counter.count = 1;
-  append_int_pair_counter_value(vec, &counter);
+BinaryReaderOpcnt::BinaryReaderOpcnt(OpcodeInfoCounts* counts)
+    : opcode_counts_(counts) {}
+
+Result BinaryReaderOpcnt::OnOpcode(Opcode opcode) {
+  current_opcode_ = opcode;
   return Result::Ok;
 }
 
-static Result on_opcode(BinaryReaderContext* context,
-                            Opcode opcode) {
-  Context* ctx = static_cast<Context*>(context->user_data);
-  IntCounterVector* opcnt_vec = &ctx->opcnt_data->opcode_vec;
-  while (static_cast<size_t>(opcode) >= opcnt_vec->size) {
-    IntCounter Counter;
-    Counter.value = opcnt_vec->size;
-    Counter.count = 0;
-    append_int_counter_value(opcnt_vec, &Counter);
-  }
-  ++opcnt_vec->data[static_cast<size_t>(opcode)].count;
-  return Result::Ok;
+Result BinaryReaderOpcnt::OnOpcodeBare() {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Bare);
 }
 
-static Result on_i32_const_expr(uint32_t value, void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  return add_int_counter_value(&ctx->opcnt_data->i32_const_vec,
-                               static_cast<int32_t>(value));
+Result BinaryReaderOpcnt::OnOpcodeUint32(uint32_t value) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Uint32, &value);
 }
 
-static Result on_get_local_expr(uint32_t local_index, void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  return add_int_counter_value(&ctx->opcnt_data->get_local_vec, local_index);
+Result BinaryReaderOpcnt::OnOpcodeIndex(Index value) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Index, &value);
 }
 
-static Result on_set_local_expr(uint32_t local_index, void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  return add_int_counter_value(&ctx->opcnt_data->set_local_vec, local_index);
+Result BinaryReaderOpcnt::OnOpcodeUint32Uint32(uint32_t value0,
+                                               uint32_t value1) {
+  uint32_t array[2] = {value0, value1};
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Uint32Uint32, array, 2);
 }
 
-static  Result on_tee_local_expr(uint32_t local_index, void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  return add_int_counter_value(&ctx->opcnt_data->tee_local_vec, local_index);
+Result BinaryReaderOpcnt::OnOpcodeUint64(uint64_t value) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Uint64, &value);
 }
 
-static  Result on_load_expr(Opcode opcode,
-                                uint32_t alignment_log2,
-                                uint32_t offset,
-                                void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  if (opcode == Opcode::I32Load)
-    return add_int_pair_counter_value(&ctx->opcnt_data->i32_load_vec,
-                                      alignment_log2, offset);
-  return Result::Ok;
+Result BinaryReaderOpcnt::OnOpcodeF32(uint32_t value) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Float32, &value);
 }
 
-static  Result on_store_expr(Opcode opcode,
-                                 uint32_t alignment_log2,
-                                 uint32_t offset,
-                                 void* user_data) {
-  Context* ctx = static_cast<Context*>(user_data);
-  if (opcode == Opcode::I32Store)
-    return add_int_pair_counter_value(&ctx->opcnt_data->i32_store_vec,
-                                      alignment_log2, offset);
-  return Result::Ok;
+Result BinaryReaderOpcnt::OnOpcodeF64(uint64_t value) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::Float64, &value);
 }
 
-static void on_error(BinaryReaderContext* ctx, const char* message) {
-  DefaultErrorHandlerInfo info;
-  info.header = "error reading binary";
-  info.out_file = stdout;
-  info.print_header = PrintErrorHeader::Once;
-  default_binary_error_callback(ctx->offset, message, &info);
+Result BinaryReaderOpcnt::OnOpcodeBlockSig(Type sig_type) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::BlockSig, &sig_type);
 }
 
-void init_opcnt_data(OpcntData* data) {
-  WABT_ZERO_MEMORY(*data);
+Result BinaryReaderOpcnt::OnBrTableExpr(Index num_targets,
+                                        Index* target_depths,
+                                        Index default_target_depth) {
+  return Emplace(current_opcode_, OpcodeInfo::Kind::BrTable, target_depths,
+                 num_targets, default_target_depth);
 }
 
-void destroy_opcnt_data(OpcntData* data) {
-  destroy_int_counter_vector(&data->opcode_vec);
-  destroy_int_counter_vector(&data->i32_const_vec);
-  destroy_int_counter_vector(&data->get_local_vec);
-  destroy_int_pair_counter_vector(&data->i32_load_vec);
+Result BinaryReaderOpcnt::OnEndExpr() {
+  return Emplace(Opcode::End, OpcodeInfo::Kind::Bare);
 }
 
-Result read_binary_opcnt(const void* data,
-                                  size_t size,
-                                  const struct ReadBinaryOptions* options,
-                                  OpcntData* opcnt_data) {
-  Context ctx;
-  WABT_ZERO_MEMORY(ctx);
-  ctx.opcnt_data = opcnt_data;
+Result BinaryReaderOpcnt::OnEndFunc() {
+  return Emplace(Opcode::End, OpcodeInfo::Kind::Bare);
+}
 
-  BinaryReader reader;
-  WABT_ZERO_MEMORY(reader);
-  reader.user_data = &ctx;
-  reader.on_error = on_error;
-  reader.on_opcode = on_opcode;
-  reader.on_i32_const_expr = on_i32_const_expr;
-  reader.on_get_local_expr = on_get_local_expr;
-  reader.on_set_local_expr = on_set_local_expr;
-  reader.on_tee_local_expr = on_tee_local_expr;
-  reader.on_load_expr = on_load_expr;
-  reader.on_store_expr = on_store_expr;
+}  // end anonymous namespace
 
-  return read_binary(data, size, &reader, 1, options);
+Result ReadBinaryOpcnt(const void* data,
+                       size_t size,
+                       const ReadBinaryOptions& options,
+                       OpcodeInfoCounts* counts) {
+  BinaryReaderOpcnt reader(counts);
+  return ReadBinary(data, size, &reader, options);
 }
 
 }  // namespace wabt

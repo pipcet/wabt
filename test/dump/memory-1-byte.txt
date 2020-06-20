@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module (memory 1))
 (;; STDOUT ;;;
 0000000: 0061 736d                                 ; WASM_BINARY_MAGIC
@@ -12,7 +12,8 @@
 000000b: 00                                        ; limits: flags
 000000c: 01                                        ; limits: initial
 0000009: 03                                        ; FIXUP section size
-memory-1-byte.wasm:	file format wasm 0x000001
+
+memory-1-byte.wasm:	file format wasm 0x1
 
 Code Disassembly:
 

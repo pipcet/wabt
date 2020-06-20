@@ -1,22 +1,31 @@
 ;;; TOOL: run-interp-spec
 ;;; STDIN_FILE: third_party/testsuite/func_ptrs.wast
 (;; STDOUT ;;;
-called host spectest.print(i32:83) =>
+called host spectest.print_i32(i32:83) =>
 four(i32:83) =>
-out/third_party/testsuite/func_ptrs.wast:31: assert_invalid passed:
-  error: @0x0000000b: elem section without table section
-out/third_party/testsuite/func_ptrs.wast:32: assert_invalid passed:
-  error: @0x00000015: elem section without table section
-out/third_party/testsuite/func_ptrs.wast:35: assert_invalid passed:
-  error: type mismatch in elem segment, expected i32 but got i64
-  error: @0x00000015: end_elem_segment_init_expr callback failed
-out/third_party/testsuite/func_ptrs.wast:39: assert_invalid passed:
-  error: @0x00000015: expected END opcode after initializer expression
-out/third_party/testsuite/func_ptrs.wast:43: assert_invalid passed:
-  error: @0x00000013: unexpected opcode in initializer expression: 1 (0x1)
-out/third_party/testsuite/func_ptrs.wast:47: assert_invalid passed:
-  error: @0x0000000c: invalid function signature index: 42
-out/third_party/testsuite/func_ptrs.wast:48: assert_invalid passed:
-  error: @0x0000001c: invalid import signature index
+out/test/spec/func_ptrs.wast:32: assert_invalid passed:
+  0000000: error: table variable out of range: 0 (max 0)
+  000000c: error: BeginElemSegment callback failed
+out/test/spec/func_ptrs.wast:33: assert_invalid passed:
+  0000000: error: table variable out of range: 0 (max 0)
+  0000016: error: BeginElemSegment callback failed
+out/test/spec/func_ptrs.wast:36: assert_invalid passed:
+  0000014: error: expected i32 init_expr
+out/test/spec/func_ptrs.wast:40: assert_invalid passed:
+  0000015: error: expected END opcode after initializer expression
+out/test/spec/func_ptrs.wast:44: assert_invalid passed:
+  0000013: error: unexpected opcode in initializer expression: 0x1
+out/test/spec/func_ptrs.wast:48: assert_invalid passed:
+  0000000: error: function type variable out of range: 42 (max 0)
+  000000c: error: OnFunction callback failed
+out/test/spec/func_ptrs.wast:49: assert_invalid passed:
+  0000000: error: function type variable out of range: 43 (max 0)
+  0000020: error: OnImportFunc callback failed
+out/test/spec/func_ptrs.wast:78: assert_trap passed: undefined table index
+out/test/spec/func_ptrs.wast:79: assert_trap passed: undefined table index
+out/test/spec/func_ptrs.wast:80: assert_trap passed: undefined table index
+out/test/spec/func_ptrs.wast:89: assert_trap passed: undefined table index
+out/test/spec/func_ptrs.wast:90: assert_trap passed: undefined table index
+out/test/spec/func_ptrs.wast:91: assert_trap passed: undefined table index
 33/33 tests passed.
 ;;; STDOUT ;;)

@@ -1,5 +1,5 @@
-;;; TOOL: run-wasmdump
-;;; FLAGS: -v
+;;; TOOL: run-objdump
+;;; ARGS0: -v
 (module
   (func
     block $outer           ;; 3
@@ -61,11 +61,12 @@
 000002a: 0b                                        ; end
 0000015: 15                                        ; FIXUP func body size
 0000013: 17                                        ; FIXUP section size
-br-block-named.wasm:	file format wasm 0x000001
+
+br-block-named.wasm:	file format wasm 0x1
 
 Code Disassembly:
 
-000015 func[0]:
+000016 func[0]:
  000017: 02 40                      | block
  000019: 03 40                      |   loop
  00001b: 02 40                      |     block
@@ -73,9 +74,10 @@ Code Disassembly:
  00001f: 1a                         |       drop
  000020: 02 40                      |       block
  000022: 0c 00                      |         br 0
- 000024: 0c 03                      |         br 0x3
+ 000024: 0c 03                      |         br 3
  000026: 0b                         |       end
  000027: 0b                         |     end
  000028: 0b                         |   end
  000029: 0b                         | end
+ 00002a: 0b                         | end
 ;;; STDOUT ;;)

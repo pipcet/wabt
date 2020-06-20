@@ -17,18 +17,20 @@
 #ifndef WABT_VALIDATOR_H_
 #define WABT_VALIDATOR_H_
 
-#include "ast-lexer.h"
-#include "common.h"
+#include "src/error.h"
+#include "src/feature.h"
+#include "src/shared-validator.h"
 
 namespace wabt {
 
 struct Module;
 struct Script;
 
-/* perform all checks on the AST; the module is valid if and only if this
- * function succeeds. */
-Result validate_script(AstLexer*, const struct Script*, SourceErrorHandler*);
+// Perform all checks on the script. It is valid if and only if this function
+// succeeds.
+Result ValidateScript(const Script*, Errors*, const ValidateOptions&);
+Result ValidateModule(const Module*, Errors*, const ValidateOptions&);
 
 }  // namespace wabt
 
-#endif /* WABT_VALIDATOR_H_ */
+#endif // WABT_VALIDATOR_H_

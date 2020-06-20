@@ -20,16 +20,18 @@ section(CODE) {
   }
 }
 section("name") {
-  func_count[1]
-  str("bar")
-  local_count[0]
+  section(NAME_FUNCTION) {
+    func_count[1]
+    index[0]
+    str("bar")
+  }
 }
 (;; STDOUT ;;;
 (module
   (type (;0;) (func))
-  (func bar (type 0)
+  (func $bar (type 0)
     return)
   (global (;0;) i32 (i32.const 0))
-  (export "bar" (func bar))
+  (export "bar" (func $bar))
   (export "d_glob" (global 0)))
 ;;; STDOUT ;;)

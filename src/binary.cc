@@ -14,14 +14,32 @@
  * limitations under the License.
  */
 
-#include "binary.h"
+#include "src/binary.h"
 
 namespace wabt {
 
-const char* g_section_name[] = {
-#define V(NAME, name, code) #NAME,
+BinarySectionOrder GetSectionOrder(BinarySection sec) {
+  switch (sec) {
+#define V(Name, name, code) \
+  case BinarySection::Name: \
+    return BinarySectionOrder::Name;
     WABT_FOREACH_BINARY_SECTION(V)
 #undef V
-};
+  default:
+    WABT_UNREACHABLE;
+  }
+}
+
+const char* GetSectionName(BinarySection sec) {
+  switch (sec) {
+#define V(Name, name, code) \
+  case BinarySection::Name: \
+    return #Name;
+    WABT_FOREACH_BINARY_SECTION(V)
+#undef V
+    default:
+      WABT_UNREACHABLE;
+  }
+}
 
 }  // namespace wabt

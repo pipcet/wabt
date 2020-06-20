@@ -17,22 +17,16 @@
 #ifndef WABT_RESOLVE_NAMES_H_
 #define WABT_RESOLVE_NAMES_H_
 
-#include "common.h"
+#include "src/common.h"
+#include "src/error.h"
 
 namespace wabt {
 
-struct AstLexer;
 struct Module;
 struct Script;
-struct SourceErrorHandler;
 
-Result resolve_names_module(struct AstLexer*,
-                            struct Module*,
-                            struct SourceErrorHandler*);
-
-Result resolve_names_script(struct AstLexer*,
-                            struct Script*,
-                            struct SourceErrorHandler*);
+Result ResolveNamesModule(Module*, Errors*);
+Result ResolveNamesScript(Script*, Errors*);
 
 }  // namespace wabt
 
