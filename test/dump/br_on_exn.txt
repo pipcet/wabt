@@ -12,19 +12,19 @@
       i32.const 0
     end
     drop))
-(;; STDOUT ;;;
+(;; STDERR ;;;
 0000000: 0061 736d                                 ; WASM_BINARY_MAGIC
 0000004: 0100 0000                                 ; WASM_BINARY_VERSION
 ; section "Type" (1)
 0000008: 01                                        ; section code
 0000009: 00                                        ; section size (guess)
 000000a: 02                                        ; num types
-; type 0
+; func type 0
 000000b: 60                                        ; func
 000000c: 01                                        ; num params
 000000d: 7f                                        ; i32
 000000e: 00                                        ; num results
-; type 1
+; func type 1
 000000f: 60                                        ; func
 0000010: 00                                        ; num params
 0000011: 00                                        ; num results
@@ -74,6 +74,8 @@
 000001f: 12                                        ; FIXUP section size
 ; move data: [1e, 32) -> [1b, 2f)
 ; truncate to 47 (0x2f)
+;;; STDERR ;;)
+(;; STDOUT ;;;
 
 br_on_exn.wasm:	file format wasm 0x1
 

@@ -63,7 +63,7 @@ static void ParseOptions(int argc, char* argv[]) {
 
   parser.AddOption('v', "verbose", "Use multiple times for more info", []() {
     s_verbose++;
-    s_log_stream = FileStream::CreateStdout();
+    s_log_stream = FileStream::CreateStderr();
   });
   parser.AddOption("debug-parser", "Turn on debugging the parser of wast files",
                    []() { s_debug_parsing = true; });
@@ -134,11 +134,18 @@ int ProgramMain(int argc, char** argv) {
                                    output_basename, s_write_binary_options,
                                    &module_streams, s_log_stream.get());
 
-    json_stream.WriteToFile(s_outfile);
+    if (Succeeded(result)) {
+      result = json_stream.WriteToFile(s_outfile);
+    }
 
-    for (auto iter = module_streams.begin(); iter != module_streams.end();
-         ++iter) {
-      iter->stream->WriteToFile(iter->filename);
+    if (Succeeded(result)) {
+      for (auto iter = module_streams.begin(); iter != module_streams.end();
+           ++iter) {
+        result = iter->stream->WriteToFile(iter->filename);
+        if (!Succeeded(result)) {
+          break;
+        }
+      }
     }
   }
 

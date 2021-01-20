@@ -16,6 +16,7 @@
 
 cmake_minimum_required(VERSION 3.0.0)
 project(WABT VERSION 1.0.13)
+include(GNUInstallDirs)
 
 if (POLICY CMP0077)
   cmake_policy(SET CMP0077 NEW)
@@ -52,9 +53,14 @@ if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.git)
   endif ()
 endif ()
 
+if (NOT "${CMAKE_PROJECT_VERSION}")
+  set(CMAKE_PROJECT_VERSION ${PROJECT_VERSION})
+endif()
+
 option(BUILD_TESTS "Build GTest-based tests" ON)
 option(USE_SYSTEM_GTEST "Use system GTest, instead of building" OFF)
 option(BUILD_TOOLS "Build wabt commandline tools" ON)
+option(BUILD_FUZZ_TOOLS "Build tools that can repro fuzz bugs" OFF)
 option(BUILD_LIBWASM "Build libwasm" ON)
 option(USE_ASAN "Use address sanitizer" OFF)
 option(USE_MSAN "Use memory sanitizer" OFF)
@@ -120,29 +126,24 @@ if (COMPILER_IS_MSVC)
   # disable warning C4800: implicit conversion from larger int to bool
   add_definitions(-W3 -wd4018 -wd4056 -wd4756 -wd4267 -wd4244 -wd4800 -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS)
 
-  if (WERROR)
-    add_definitions(-WX)
-  endif ()
-
   if (NOT WITH_EXCEPTIONS)
     # disable exception use in C++ library
     add_definitions(-D_HAS_EXCEPTIONS=0)
   endif ()
+
+  # multi-core build.
+  add_definitions("/MP")
+
 else ()
   # disable -Wunused-parameter: this is really common when implementing
   #   interfaces, etc.
   # disable -Wpointer-arith: this is a GCC extension, and doesn't work in MSVC.
   add_definitions(
-    -Wall -Wextra -Wno-unused-parameter -Wpointer-arith -g
-    -Wuninitialized
+    -Wall -Wextra -Wno-unused-parameter -Wpointer-arith -Wuninitialized
   )
 
   set(CMAKE_CXX_EXTENSIONS OFF)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wold-style-cast")
-
-  if (WERROR)
-    add_definitions(-Werror)
-  endif ()
 
   if (NOT WITH_EXCEPTIONS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
@@ -190,6 +191,8 @@ else ()
           set(TARGET_ARCH "i386")
         elseif (${FILE_OUTPUT} MATCHES "ARM")
           set(TARGET_ARCH "ARM")
+        elseif (${FILE_OUTPUT} MATCHES "IBM S/390")
+          set(TARGET_ARCH "s390x")
         else ()
           message(WARNING "Unknown target architecture!")
         endif ()
@@ -203,6 +206,9 @@ else ()
     if (TARGET_ARCH STREQUAL "i386")
       # wasm doesn't allow for x87 floating point math
       add_definitions(-msse2 -mfpmath=sse)
+    endif ()
+    if (TARGET_ARCH STREQUAL "s390x")
+      add_definitions(-DWABT_BIG_ENDIAN=1)
     endif ()
   endif ()
 endif ()
@@ -344,15 +350,36 @@ set(WABT_LIBRARY_SRC
 
 add_library(wabt STATIC ${WABT_LIBRARY_SRC})
 
+IF (NOT WIN32)
+  add_library(wasm-rt-impl STATIC wasm2c/wasm-rt-impl.c wasm2c/wasm-rt-impl.h)
+  install(TARGETS wasm-rt-impl DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  install(FILES wasm2c/wasm-rt.h wasm2c/wasm-rt-impl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif ()
+
+if (BUILD_FUZZ_TOOLS)
+  set(FUZZ_FLAGS "-fsanitize=fuzzer,address")
+  add_library(wabt-fuzz STATIC ${WABT_LIBRARY_SRC})
+  set_target_properties(wabt-fuzz
+    PROPERTIES
+    COMPILE_FLAGS "${FUZZ_FLAGS}"
+  )
+endif ()
+
 # libwasm, which implenents the wasm C API
 if (BUILD_LIBWASM)
   add_library(wasm SHARED ${WABT_LIBRARY_SRC} src/interp/interp-wasm-c-api.cc)
   target_link_libraries(wasm wabt)
   target_include_directories(wasm PUBLIC third_party/wasm-c-api/include)
   if (COMPILER_IS_MSVC)
+    if (WERROR)
+      target_compile_options(wasm PRIVATE -WX)
+    endif ()
     target_compile_definitions(wasm PRIVATE "WASM_API_EXTERN=__declspec(dllexport)")
   else ()
-    target_compile_options(wasm PRIVATE -Wno-old-style-cast)
+    if (WERROR)
+      target_compile_options(wasm PRIVATE -Werror)
+    endif ()
+    target_compile_options(wasm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-old-style-cast>)
     target_compile_definitions(wasm PRIVATE "WASM_API_EXTERN=__attribute__((visibility(\"default\")))")
   endif ()
   set_target_properties(wasm PROPERTIES CXX_VISIBILITY_PRESET hidden)
@@ -369,10 +396,15 @@ endif ()
 
 include(CMakeParseArguments)
 function(wabt_executable)
-  cmake_parse_arguments(EXE "WITH_LIBM;INSTALL" "NAME" "SOURCES;LIBS" ${ARGN})
+  cmake_parse_arguments(EXE "WITH_LIBM;FUZZ;INSTALL" "NAME" "SOURCES;LIBS" ${ARGN})
 
   # Always link libwabt.
-  set(EXE_LIBS "${EXE_LIBS};wabt")
+  if (EXE_FUZZ)
+    set(EXE_LIBS "${EXE_LIBS};wabt-fuzz")
+    set(EXTRA_LINK_FLAGS "${FUZZ_FLAGS}")
+  else ()
+    set(EXE_LIBS "${EXE_LIBS};wabt")
+  endif ()
 
   # Optionally link libm.
   if (EXE_WITH_LIBM AND (COMPILER_IS_CLANG OR COMPILER_IS_GNU))
@@ -388,11 +420,15 @@ function(wabt_executable)
   if (EMSCRIPTEN)
     # build to JS for now, as node.js doesn't have code caching for wasm yet,
     # and wasm startup times are slower
-    set_target_properties(${EXE_NAME}
-      PROPERTIES
-      LINK_FLAGS "-s NODERAWFS -s SINGLE_FILE -s WASM=0 -Oz -s ALLOW_MEMORY_GROWTH=1"
+    set(EXTRA_LINK_FLAGS
+      "${EXTRA_LINK_FLAGS} -s NODERAWFS -s SINGLE_FILE -s WASM=0 -Oz -s ALLOW_MEMORY_GROWTH=1"
     )
   endif ()
+
+  set_target_properties(${EXE_NAME}
+    PROPERTIES
+    LINK_FLAGS "${EXTRA_LINK_FLAGS}"
+  )
 
   if (EXE_INSTALL)
     list(APPEND WABT_EXECUTABLES ${EXE_NAME})
@@ -502,6 +538,16 @@ if (BUILD_TOOLS)
     SOURCES src/tools/wasm-decompile.cc
     INSTALL
   )
+
+  if(BUILD_FUZZ_TOOLS)
+    # wasm2wat-fuzz
+    wabt_executable(
+      NAME wasm2wat-fuzz
+      SOURCES src/tools/wasm2wat-fuzz.cc
+      FUZZ
+      INSTALL
+    )
+  endif ()
 endif ()
 
 # Python 3.5 is the version shipped in Ubuntu Xenial
