@@ -611,6 +611,7 @@ void BinaryReaderObjdumpDisassemble::LogOpcode(size_t data_size,
       switch (current_opcode) {
         case Opcode::Else:
         case Opcode::Catch:
+        case Opcode::CatchAll:
 	  if (indent_level)
 	    {
 	      IndentLevel *old = indent_level;
